@@ -2,7 +2,15 @@
 name = "engineio"
 version = "0.1.0"
 edition = "2021"
+description = "An implementation of a engineio written in rust."
+repository = "https://github.com/socket-iox/socket-io"
+keywords = ["socketio", "engineio", "network", "protocol"]
+categories = [
+  "network-programming",
+  "web-programming",
+  "web-programming::websocket",
+]
+license = "MIT"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
