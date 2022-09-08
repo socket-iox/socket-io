@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::{char, collections::VecDeque};
 use std::{convert::TryFrom, str::from_utf8};
 
-use crate::error::{Error, Result};
+use crate::{Error, Result};
 
 type Sid = Arc<String>;
 

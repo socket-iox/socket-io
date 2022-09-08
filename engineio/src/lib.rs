@@ -1,3 +1,6 @@
+pub mod error;
+pub mod header;
 pub mod packet;
 
-pub mod error;
+pub use error::Error;
+pub(crate) use error::Result;
