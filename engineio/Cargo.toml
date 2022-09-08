@@ -9,8 +9,16 @@ categories = [
   "network-programming",
   "web-programming",
   "web-programming::websocket",
+  "web-programming::socketio",
 ]
 license = "MIT"
 
 
 [dependencies]
+base64 = "0.13.0"
+bytes = "1"
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive", "rc"] }
+thiserror = "1.0"
+
+[lib]
