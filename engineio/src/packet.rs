@@ -3,13 +3,10 @@ use bytes::{BufMut, Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
 use std::ops::Index;
-use std::sync::Arc;
 use std::{char, collections::VecDeque};
 use std::{convert::TryFrom, str::from_utf8};
 
-use crate::{Error, Result};
-
-type Sid = Arc<String>;
+use crate::{Error, Result, Sid};
 
 const SEPARATOR: char = '\x1e';
 
