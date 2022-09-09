@@ -15,6 +15,8 @@ license = "MIT"
 
 
 [dependencies]
+adler32 = "1.2.0"
+async-trait = "0.1.57"
 base64 = "0.13.0"
 bytes = "1"
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
@@ -27,6 +29,6 @@ tokio-tungstenite = { version = "0.17.2" }
 tungstenite = "0.17.3"
 http = "0.2.8"
 httparse = "1.6.0"
-reqwest = { version = "0.11.11", features = ["blocking", "native-tls", "stream"] }
+reqwest = { version = "0.11.12", features = ["blocking", "rustls-tls", "stream"] }
 
 [lib]

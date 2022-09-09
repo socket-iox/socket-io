@@ -1,12 +1,16 @@
 use base64::DecodeError;
+use bytes::Bytes;
 use reqwest::header::{InvalidHeaderName, InvalidHeaderValue};
+use reqwest::Error as HttpError;
 use serde_json::Error as JsonError;
 use std::io::Error as IoError;
 use std::str::Utf8Error;
 use thiserror::Error;
+use tokio::sync::mpsc::error::SendError;
 use tungstenite::Error as WsError;
 
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum Error {
     #[error("Invalid packet type: {0}")]
     InvalidPacketType(u8),
@@ -28,6 +32,12 @@ pub enum Error {
     WsError(#[from] WsError),
     #[error("Utf8 error: {0}")]
     Utf8Error(#[from] Utf8Error),
+    #[error("Http error: {0}")]
+    HttpError(#[from] HttpError),
+    #[error("Invalid http resposne status: {0}")]
+    InvalidHttpResponseStatus(u16),
+    #[error("Send error: {0}")]
+    SendError(#[from] SendError<Bytes>),
 }
 
 pub(crate) type Result<T> = std::result::Result<T, Error>;
