@@ -3,6 +3,7 @@ use std::{
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
+    time::SystemTime,
 };
 
 use async_trait::async_trait;
@@ -17,7 +18,7 @@ use tokio::sync::{
 
 use crate::{
     error::Result,
-    transports::{append_hash, Payload, Transport},
+    transports::{Payload, Transport},
     Error,
 };
 
@@ -40,13 +41,7 @@ impl ClientPolling {
             builder = builder.default_headers(headers);
         }
         let client = builder.build()?;
-
-        if !url
-            .query_pairs()
-            .any(|(k, v)| k == "transport" || v == "polling")
-        {
-            url.query_pairs_mut().append_pair("transport", "polling");
-        }
+        url.query_pairs_mut().append_pair("transport", "polling");
 
         Ok(Self { client, url })
     }
@@ -61,7 +56,7 @@ impl ClientPolling {
 impl Transport for ClientPolling {
     async fn emit(&self, payload: Payload) -> Result<()> {
         let body = match payload {
-            Payload::String(data) => data,
+            Payload::Text(data) => data,
             Payload::Binary(data) => {
                 let mut buf = BytesMut::with_capacity(data.len() + 1);
                 buf.put_u8(b'b');
@@ -113,7 +108,7 @@ impl ServerPolling {
 impl Transport for ServerPolling {
     async fn emit(&self, payload: Payload) -> Result<()> {
         let data = match payload {
-            Payload::String(data) => data,
+            Payload::Text(data) => data,
             Payload::Binary(data) => {
                 let mut buf = BytesMut::with_capacity(data.len() + 1);
                 buf.put_u8(b'b');
@@ -139,6 +134,15 @@ impl Stream for ServerPolling {
             None => Poll::Ready(None),
         }
     }
+}
+
+pub(crate) fn append_hash(url: &Url) -> Url {
+    let mut url = url.clone();
+    let now_str = format!("{:#?}", SystemTime::now());
+    // SAFETY: time string is valid for adler32
+    let hash = adler32::adler32(now_str.as_bytes()).unwrap();
+    url.query_pairs_mut().append_pair("t", &hash.to_string());
+    url
 }
 
 #[cfg(test)]
@@ -178,7 +182,7 @@ mod test {
 
         assert_eq!(msg, data);
 
-        let payload = Payload::String(data.clone());
+        let payload = Payload::Text(data.clone());
         transport.emit(payload).await?;
         let msg = send_rx.recv().await;
         assert!(msg.is_some());

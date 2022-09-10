@@ -1,28 +1,35 @@
-use std::time::SystemTime;
+use std::borrow::Cow;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use reqwest::Url;
+use futures_util::Stream;
+use tungstenite::Message;
 
 use crate::error::Result;
 
 pub(crate) mod polling;
-
-pub enum Payload {
-    String(Bytes),
-    Binary(Bytes),
-}
+pub(crate) mod websocket;
 
 #[async_trait]
-pub trait Transport {
+pub trait Transport: Stream<Item = Result<Bytes>> {
     async fn emit(&self, payload: Payload) -> Result<()>;
 }
 
-pub(crate) fn append_hash(url: &Url) -> Url {
-    let mut url = url.clone();
-    let now_str = format!("{:#?}", SystemTime::now());
-    // SAFETY: time string is valid for adler32
-    let hash = adler32::adler32(now_str.as_bytes()).unwrap();
-    url.query_pairs_mut().append_pair("t", &hash.to_string());
-    url
+pub enum Payload {
+    Text(Bytes),
+    Binary(Bytes),
+}
+
+impl TryFrom<Payload> for Message {
+    type Error = crate::Error;
+
+    fn try_from(payload: Payload) -> std::result::Result<Self, Self::Error> {
+        let message = match payload {
+            Payload::Text(data) => {
+                Message::text(Cow::Borrowed(std::str::from_utf8(data.as_ref())?))
+            }
+            Payload::Binary(data) => Message::binary(Cow::Borrowed(data.as_ref())),
+        };
+        Ok(message)
+    }
 }

@@ -14,6 +14,8 @@ use tungstenite::Error as WsError;
 pub enum Error {
     #[error("Invalid packet type: {0}")]
     InvalidPacketType(u8),
+    #[error("Invalid packet")]
+    InvalidPacket(),
     #[error("Incomplete packet")]
     IncompletePacket(),
     #[error("Invalid base 64: {0}")]
@@ -38,6 +40,8 @@ pub enum Error {
     InvalidHttpResponseStatus(u16),
     #[error("Send error: {0}")]
     SendError(#[from] SendError<Bytes>),
+    #[error("Server not allow upgrading to websocket")]
+    IllegalWebsocketUpgrade(),
 }
 
 pub(crate) type Result<T> = std::result::Result<T, Error>;
