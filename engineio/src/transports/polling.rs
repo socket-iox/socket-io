@@ -23,19 +23,19 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
-pub struct ClientPolling {
+pub struct ClientPollingTransport {
     client: Client,
     url: Url,
 }
 
 #[derive(Debug, Clone)]
-pub struct ServerPolling {
+pub struct ServerPollingTransport {
     sender: Arc<Sender<Bytes>>,
     receiver: Arc<Mutex<Receiver<Bytes>>>,
 }
 
-impl ClientPolling {
-    pub fn new(mut url: Url, headers: Option<HeaderMap>) -> Result<Self> {
+impl ClientPollingTransport {
+    pub(crate) fn new(mut url: Url, headers: Option<HeaderMap>) -> Result<Self> {
         let mut builder = ClientBuilder::new();
         if let Some(headers) = headers {
             builder = builder.default_headers(headers);
@@ -47,13 +47,13 @@ impl ClientPolling {
     }
 
     #[cfg(test)]
-    pub(crate) fn url(&self) -> Url {
+    fn url(&self) -> Url {
         self.url.clone()
     }
 }
 
 #[async_trait]
-impl Transport for ClientPolling {
+impl Transport for ClientPollingTransport {
     async fn emit(&self, payload: Payload) -> Result<()> {
         let body = match payload {
             Payload::Text(data) => data,
@@ -81,7 +81,7 @@ impl Transport for ClientPolling {
     }
 }
 
-impl Stream for ClientPolling {
+impl Stream for ClientPollingTransport {
     type Item = Result<Bytes>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -95,8 +95,8 @@ impl Stream for ClientPolling {
     }
 }
 
-impl ServerPolling {
-    fn new(sender: Sender<Bytes>, receiver: Receiver<Bytes>) -> Self {
+impl ServerPollingTransport {
+    pub(crate) fn new(sender: Sender<Bytes>, receiver: Receiver<Bytes>) -> Self {
         Self {
             sender: Arc::new(sender),
             receiver: Arc::new(Mutex::new(receiver)),
@@ -105,7 +105,7 @@ impl ServerPolling {
 }
 
 #[async_trait]
-impl Transport for ServerPolling {
+impl Transport for ServerPollingTransport {
     async fn emit(&self, payload: Payload) -> Result<()> {
         let data = match payload {
             Payload::Text(data) => data,
@@ -122,7 +122,7 @@ impl Transport for ServerPolling {
     }
 }
 
-impl Stream for ServerPolling {
+impl Stream for ServerPollingTransport {
     type Item = Result<Bytes>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -156,7 +156,7 @@ mod test {
     #[test]
     fn polling_transport_url() -> Result<()> {
         let url = Url::from_str("http://127.0.0.1").unwrap();
-        let transport = ClientPolling::new(url.clone(), None).unwrap();
+        let transport = ClientPollingTransport::new(url.clone(), None).unwrap();
         assert_eq!(
             transport.url().to_string(),
             url.to_string() + "?transport=polling"
@@ -168,7 +168,7 @@ mod test {
     async fn test_server_polling_transport() -> Result<()> {
         let (send_tx, mut send_rx) = channel(100);
         let (recv_tx, recv_rx) = channel(100);
-        let mut transport = ServerPolling::new(send_tx, recv_rx);
+        let mut transport = ServerPollingTransport::new(send_tx, recv_rx);
 
         let data = Bytes::from_static(b"1Hello\x1e1HelloWorld");
 

@@ -27,12 +27,12 @@ type WebsocketSender = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Mes
 type WebsocketReceiver = SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;
 
 #[derive(Clone)]
-pub struct Websocket {
+pub struct WebsocketTransport {
     sender: Arc<Mutex<WebsocketSender>>,
     receiver: Arc<Mutex<WebsocketReceiver>>,
 }
 
-impl Websocket {
+impl WebsocketTransport {
     pub async fn connect(
         mut url: Url,
         headers: Option<HeaderMap>,
@@ -53,11 +53,12 @@ impl Websocket {
     }
 
     pub fn new(sender: WebsocketSender, receiver: WebsocketReceiver) -> Self {
-        Websocket {
+        WebsocketTransport {
             sender: Arc::new(Mutex::new(sender)),
             receiver: Arc::new(Mutex::new(receiver)),
         }
     }
+
     /// Sends probe packet to ensure connection is valid, then sends upgrade
     /// request
     pub(crate) async fn upgrade(&self) -> Result<()> {
@@ -112,7 +113,7 @@ impl Websocket {
 }
 
 #[async_trait]
-impl Transport for Websocket {
+impl Transport for WebsocketTransport {
     async fn emit(&self, payload: Payload) -> Result<()> {
         let mut sender = self.sender.lock().await;
         let message: Message = payload.try_into()?;
@@ -123,7 +124,7 @@ impl Transport for Websocket {
     }
 }
 
-impl Stream for Websocket {
+impl Stream for WebsocketTransport {
     type Item = Result<Bytes>;
 
     fn poll_next(

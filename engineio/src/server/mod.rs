@@ -1,4 +1,4 @@
-mod accept;
+mod http;
 #[allow(clippy::module_inception)]
 mod server;
 
