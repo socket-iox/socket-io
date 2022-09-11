@@ -18,7 +18,7 @@ use tokio::sync::{
 
 use crate::{
     error::Result,
-    transports::{Payload, Transport},
+    transports::{Data, Transport},
     Error,
 };
 
@@ -54,10 +54,10 @@ impl ClientPollingTransport {
 
 #[async_trait]
 impl Transport for ClientPollingTransport {
-    async fn emit(&self, payload: Payload) -> Result<()> {
+    async fn emit(&self, payload: Data) -> Result<()> {
         let body = match payload {
-            Payload::Text(data) => data,
-            Payload::Binary(data) => {
+            Data::Text(data) => data,
+            Data::Binary(data) => {
                 let mut buf = BytesMut::with_capacity(data.len() + 1);
                 buf.put_u8(b'b');
                 buf.put(base64::encode(data).as_bytes());
@@ -106,10 +106,10 @@ impl ServerPollingTransport {
 
 #[async_trait]
 impl Transport for ServerPollingTransport {
-    async fn emit(&self, payload: Payload) -> Result<()> {
+    async fn emit(&self, payload: Data) -> Result<()> {
         let data = match payload {
-            Payload::Text(data) => data,
-            Payload::Binary(data) => {
+            Data::Text(data) => data,
+            Data::Binary(data) => {
                 let mut buf = BytesMut::with_capacity(data.len() + 1);
                 buf.put_u8(b'b');
                 buf.put(base64::encode(data).as_bytes());
@@ -182,7 +182,7 @@ mod test {
 
         assert_eq!(msg, data);
 
-        let payload = Payload::Text(data.clone());
+        let payload = Data::Text(data.clone());
         transport.emit(payload).await?;
         let msg = send_rx.recv().await;
         assert!(msg.is_some());

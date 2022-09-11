@@ -1,4 +1,4 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, fmt::Debug};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -11,24 +11,22 @@ pub(crate) mod polling;
 pub(crate) mod websocket;
 
 #[async_trait]
-pub trait Transport: Stream<Item = Result<Bytes>> {
-    async fn emit(&self, payload: Payload) -> Result<()>;
+pub trait Transport: Debug + Stream<Item = Result<Bytes>> {
+    async fn emit(&self, payload: Data) -> Result<()>;
 }
 
-pub enum Payload {
+pub enum Data {
     Text(Bytes),
     Binary(Bytes),
 }
 
-impl TryFrom<Payload> for Message {
+impl TryFrom<Data> for Message {
     type Error = crate::Error;
 
-    fn try_from(payload: Payload) -> std::result::Result<Self, Self::Error> {
+    fn try_from(payload: Data) -> std::result::Result<Self, Self::Error> {
         let message = match payload {
-            Payload::Text(data) => {
-                Message::text(Cow::Borrowed(std::str::from_utf8(data.as_ref())?))
-            }
-            Payload::Binary(data) => Message::binary(Cow::Borrowed(data.as_ref())),
+            Data::Text(data) => Message::text(Cow::Borrowed(std::str::from_utf8(data.as_ref())?)),
+            Data::Binary(data) => Message::binary(Cow::Borrowed(data.as_ref())),
         };
         Ok(message)
     }

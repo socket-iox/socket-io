@@ -19,14 +19,14 @@ use tungstenite::{client::IntoClientRequest, Message};
 
 use crate::{
     error::Result,
-    transports::{Payload, Transport},
+    transports::{Data, Transport},
     Error, Packet, PacketType,
 };
 
 type WebsocketSender = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
 type WebsocketReceiver = SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct WebsocketTransport {
     sender: Arc<Mutex<WebsocketSender>>,
     receiver: Arc<Mutex<WebsocketReceiver>>,
@@ -114,7 +114,7 @@ impl WebsocketTransport {
 
 #[async_trait]
 impl Transport for WebsocketTransport {
-    async fn emit(&self, payload: Payload) -> Result<()> {
+    async fn emit(&self, payload: Data) -> Result<()> {
         let mut sender = self.sender.lock().await;
         let message: Message = payload.try_into()?;
 
