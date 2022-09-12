@@ -11,7 +11,7 @@ pub(crate) mod polling;
 pub(crate) mod websocket;
 
 #[async_trait]
-pub trait Transport: Debug + Stream<Item = Result<Bytes>> {
+pub trait Transport: Send + Debug + Unpin + Stream<Item = Result<Bytes>> {
     async fn emit(&self, payload: Data) -> Result<()>;
 }
 

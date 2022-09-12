@@ -24,7 +24,7 @@ use crate::{
 
 #[derive(Clone)]
 pub struct Socket {
-    transport: Arc<Mutex<Box<dyn Transport + Unpin>>>,
+    transport: Arc<Mutex<Box<dyn Transport>>>,
     event_tx: Arc<Sender<Event>>,
     connected: Arc<AtomicBool>,
     last_ping: Arc<Mutex<Instant>>,
@@ -47,7 +47,7 @@ impl Socket {
     // TODO: fix too_many_arguments
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        transport: Box<dyn Transport + Unpin>,
+        transport: Box<dyn Transport>,
         handshake: HandshakePacket,
         event_tx: Sender<Event>,
         should_pong: bool,

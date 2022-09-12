@@ -4,17 +4,13 @@ use futures_util::{future::poll_fn, StreamExt};
 use http::Response;
 use httparse::{Request, Status, EMPTY_HEADER};
 use reqwest::Url;
-use std::{
-    borrow::Cow,
-    collections::{HashMap, VecDeque},
-    net::SocketAddr,
-};
+use std::{borrow::Cow, collections::VecDeque, net::SocketAddr};
 use std::{str::from_utf8, sync::Arc};
+use tokio::net::TcpStream;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, ReadBuf},
     sync::mpsc::{channel, Receiver, Sender},
 };
-use tokio::{net::TcpStream, sync::Mutex};
 use tokio_tungstenite::{accept_async, MaybeTlsStream, WebSocketStream};
 use tungstenite::Message;
 
@@ -31,16 +27,12 @@ use super::Server;
 /// Limit for the number of header lines.
 const MAX_HEADERS: usize = 124;
 
-type PollingHandle = (Sender<Bytes>, Receiver<Bytes>);
+pub type PollingHandle = (Sender<Bytes>, Receiver<Bytes>);
 
-pub(crate) struct Polling {
-    polling_handles: Mutex<HashMap<Sid, PollingHandle>>,
-    polling_buffer: usize,
-}
+pub(crate) struct Polling {}
 
 impl Polling {
     pub(crate) async fn handle(
-        &self,
         server: Server,
         mut stream: TcpStream,
         peer_addr: &SocketAddr,
@@ -48,7 +40,7 @@ impl Polling {
         match read_request_type(&mut stream, peer_addr, server.max_payload()).await {
             Some(RequestType::PollingOpen) => {
                 let sid = server.generate_sid();
-                let transport = self.polling_transport(sid.clone()).await;
+                let transport = Self::polling_transport(&server, sid.clone()).await;
 
                 if server
                     .store_transport(sid.clone(), Box::new(transport))
@@ -61,11 +53,11 @@ impl Polling {
                 }
             }
             Some(RequestType::PollingPost(sid, data)) => {
-                self.polling_post(&sid, data).await;
+                Self::polling_post(&server, &sid, data).await;
                 write_stream(&mut stream, 200, Some("ok".to_string())).await
             }
             Some(RequestType::PollingGet(sid)) => {
-                let data = self.polling_get(&sid).await;
+                let data = Self::polling_get(&server, &sid).await;
                 write_stream(&mut stream, 200, data).await
             }
             _ => write_stream(&mut stream, 400, None).await,
@@ -79,18 +71,20 @@ impl Polling {
         format!("{}{}", PacketType::Open as u8, data)
     }
 
-    async fn polling_transport(&self, sid: Sid) -> ServerPollingTransport {
-        let (send_tx, send_rx) = channel(self.polling_buffer);
-        let (recv_tx, recv_rx) = channel(self.polling_buffer);
+    async fn polling_transport(server: &Server, sid: Sid) -> ServerPollingTransport {
+        let (send_tx, send_rx) = channel(server.polling_buffer());
+        let (recv_tx, recv_rx) = channel(server.polling_buffer());
 
-        let mut polling_handles = self.polling_handles.lock().await;
-        polling_handles.insert(sid.clone(), (recv_tx, send_rx));
+        let handles = server.polling_handles();
+        let mut handles = handles.lock().await;
+        handles.insert(sid.clone(), (recv_tx, send_rx));
 
         ServerPollingTransport::new(send_tx, recv_rx)
     }
 
-    async fn polling_get(&self, sid: &Sid) -> Option<String> {
-        let mut handles = self.polling_handles.lock().await;
+    async fn polling_get(server: &Server, sid: &Sid) -> Option<String> {
+        let handles = server.polling_handles();
+        let mut handles = handles.lock().await;
         if let Some((_, rx)) = handles.get_mut(sid) {
             let mut byte_vec = VecDeque::new();
             while let Ok(bytes) = rx.try_recv() {
@@ -104,8 +98,9 @@ impl Polling {
         None
     }
 
-    async fn polling_post(&self, sid: &Sid, data: Bytes) {
-        let mut handles = self.polling_handles.lock().await;
+    async fn polling_post(server: &Server, sid: &Sid, data: Bytes) {
+        let handles = server.polling_handles();
+        let mut handles = handles.lock().await;
 
         if let Some((ref mut tx, _)) = handles.get_mut(sid) {
             let _ = tx.send(data).await;
@@ -120,7 +115,7 @@ impl Websocket {
         server: Server,
         sid: Option<Sid>,
         stream: MaybeTlsStream<TcpStream>,
-        addr: &SocketAddr,
+        _addr: &SocketAddr,
     ) -> Result<()> {
         let mut ws_stream = accept_async(stream).await?;
         let sid = match sid {
@@ -135,6 +130,16 @@ impl Websocket {
         server.store_transport(sid, Box::new(transport)).await?;
 
         Ok(())
+    }
+}
+
+pub async fn handle_http(server: Server, stream: TcpStream, peer_addr: SocketAddr) -> Result<()> {
+    // TODO: tls
+    match peek_request_type(&stream, &peer_addr, server.max_payload()).await {
+        Some(RequestType::WsUpgrade(sid)) => {
+            Websocket::handle(server, sid, MaybeTlsStream::Plain(stream), &peer_addr).await
+        }
+        _ => Polling::handle(server.clone(), stream, &peer_addr).await,
     }
 }
 
@@ -156,7 +161,7 @@ async fn handle_probe(
     if let Some(Ok(Message::Text(packet))) = ws_stream.next().await {
         // PacketType::Upgrade
         if packet == "5" {
-            server.close_polling(&sid).await;
+            close_polling(&server, &sid).await;
             return Ok(sid);
         }
     }
@@ -164,6 +169,12 @@ async fn handle_probe(
     Err(Error::InvalidHandShake(
         "upgrade missing packet".to_string(),
     ))
+}
+
+async fn close_polling(server: &Server, sid: &Sid) {
+    let handles = server.polling_handles();
+    let mut handles = handles.lock().await;
+    handles.remove(sid);
 }
 
 async fn handshake(
