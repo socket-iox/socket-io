@@ -1,3 +1,4 @@
+pub mod client;
 pub mod error;
 pub mod header;
 pub mod packet;
@@ -11,3 +12,5 @@ pub use packet::{Packet, PacketType};
 pub use socket::Event;
 
 pub(crate) type Sid = std::sync::Arc<String>;
+
+pub const ENGINE_IO_VERSION: i32 = 4;

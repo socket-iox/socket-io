@@ -30,6 +30,8 @@ pub enum Error {
     InvalidHeaderValueFromReqwest(#[from] InvalidHeaderValue),
     #[error("Invalid hand shake: {0}")]
     InvalidHandShake(String),
+    #[error("Invalid url scheme: {0}")]
+    InvalidUrlScheme(String),
     #[error("Io Error: {0}")]
     IoError(#[from] IoError),
     #[error("Websocket Error: {0}")]

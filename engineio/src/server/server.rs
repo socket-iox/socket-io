@@ -95,7 +95,7 @@ impl Server {
     }
 
     pub async fn store_transport(&self, sid: Sid, transport: Box<dyn Transport>) -> Result<()> {
-        let (tx, rx) = channel::<Event>(self.inner.buffer_size);
+        let (tx, _rx) = channel::<Event>(self.inner.buffer_size);
         let handshake = self.handshake_packet(vec!["webscocket".to_owned()], Some(sid.clone()));
         let socket = Socket::new(
             transport, handshake, tx, false, // server no need to pong
