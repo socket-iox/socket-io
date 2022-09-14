@@ -22,16 +22,16 @@ use crate::{
 
 #[derive(Clone)]
 pub struct Server {
-    pub(self) inner: Arc<ServerInner>,
+    inner: Arc<ServerInner>,
 }
 
-pub(self) struct ServerInner {
-    pub(self) port: u16,
-    pub(self) server_option: ServerOption,
-    pub(self) id_generator: SidGenerator,
-    pub(self) polling_handles: Arc<Mutex<HashMap<Sid, PollingHandle>>>,
-    pub(self) buffer_size: usize,
-    pub(self) sockets: RwLock<HashMap<Sid, Socket>>,
+struct ServerInner {
+    port: u16,
+    server_option: ServerOption,
+    id_generator: SidGenerator,
+    polling_handles: Arc<Mutex<HashMap<Sid, PollingHandle>>>,
+    buffer_size: usize,
+    sockets: RwLock<HashMap<Sid, Socket>>,
 }
 
 #[derive(Debug, Clone, Copy)]
