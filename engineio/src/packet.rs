@@ -72,13 +72,13 @@ pub struct Packet {
 
 /// Data which gets exchanged in a handshake as defined by the server.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct HandshakePacket {
     pub sid: Sid,
     pub upgrades: Vec<String>,
-    #[serde(rename = "pingInterval")]
     pub ping_interval: u64,
-    #[serde(rename = "pingTimeout")]
     pub ping_timeout: u64,
+    pub max_payload: usize,
 }
 
 impl TryFrom<Packet> for HandshakePacket {
@@ -363,6 +363,7 @@ mod tests {
         let packet = HandshakePacket {
             ping_interval: 10000,
             ping_timeout: 1000,
+            max_payload: 1000,
             sid: Arc::new("Test".to_owned()),
             upgrades: vec!["websocket".to_owned(), "test".to_owned()],
         };

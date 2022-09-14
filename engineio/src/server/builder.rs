@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tokio::sync::{mpsc::channel, Mutex};
 
-use crate::server::{self, server::ServerInner, Server, ServerOption};
+use crate::server::{server::ServerInner, Server, ServerOption};
 
 pub struct ServerBuilder {
     port: u16,

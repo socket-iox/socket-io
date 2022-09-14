@@ -73,6 +73,10 @@ impl Server {
         Ok(())
     }
 
+    pub fn event_rx(&self) -> Arc<Mutex<Receiver<Event>>> {
+        self.inner.event_rx.clone()
+    }
+
     pub(crate) fn polling_handles(&self) -> Arc<Mutex<HashMap<Sid, PollingHandle>>> {
         self.inner.polling_handles.clone()
     }
@@ -98,8 +102,9 @@ impl Server {
         HandshakePacket {
             sid,
             upgrades,
-            ping_interval: 1000,
-            ping_timeout: 1000,
+            ping_interval: self.inner.server_option.ping_interval,
+            ping_timeout: self.inner.server_option.ping_timeout,
+            max_payload: self.inner.server_option.max_payload,
         }
     }
 
