@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use futures_util::StreamExt;
 use reqwest::Url;
 use tokio::sync::mpsc::channel;
@@ -154,7 +156,7 @@ impl ClientBuilder {
                     Socket::new(
                         Box::new(transport),
                         self.handshake.unwrap(),
-                        tx,
+                        Arc::new(tx),
                         self.should_pong,
                         false,
                     ),
@@ -180,7 +182,7 @@ impl ClientBuilder {
             Socket::new(
                 Box::new(transport),
                 self.handshake.unwrap(),
-                tx,
+                Arc::new(tx),
                 self.should_pong,
                 false,
             ),

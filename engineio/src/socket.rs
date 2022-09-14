@@ -49,17 +49,17 @@ impl Socket {
     pub(crate) fn new(
         transport: Box<dyn Transport>,
         handshake: HandshakePacket,
-        event_tx: Sender<Event>,
+        event_tx: Arc<Sender<Event>>,
         should_pong: bool,
         server_end: bool,
     ) -> Self {
         Socket {
             transport: Arc::new(Mutex::new(transport)),
-            event_tx: Arc::new(event_tx),
             connected: Arc::new(AtomicBool::default()),
             last_ping: Arc::new(Mutex::new(Instant::now())),
             last_pong: Arc::new(Mutex::new(Instant::now())),
             connection_data: Arc::new(handshake),
+            event_tx,
             server_end,
             should_pong,
         }

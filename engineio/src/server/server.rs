@@ -7,7 +7,10 @@ use std::{
 use bytes::Bytes;
 use tokio::{
     net::TcpListener,
-    sync::{mpsc::channel, Mutex, RwLock},
+    sync::{
+        mpsc::{channel, Receiver, Sender},
+        Mutex, RwLock,
+    },
     time::{interval, Instant},
 };
 
@@ -22,17 +25,18 @@ use crate::{
 
 #[derive(Clone)]
 pub struct Server {
-    inner: Arc<ServerInner>,
+    pub(super) inner: Arc<ServerInner>,
 }
 
-struct ServerInner {
-    port: u16,
-    server_option: ServerOption,
-    id_generator: SidGenerator,
-    polling_handles: Arc<Mutex<HashMap<Sid, PollingHandle>>>,
-    buffer_size: usize,
-    event_size: usize,
-    sockets: RwLock<HashMap<Sid, Socket>>,
+pub(super) struct ServerInner {
+    pub(super) port: u16,
+    pub(super) server_option: ServerOption,
+    pub(super) id_generator: SidGenerator,
+    pub(super) polling_handles: Arc<Mutex<HashMap<Sid, PollingHandle>>>,
+    pub(super) polling_buffer: usize,
+    pub(super) event_tx: Arc<Sender<Event>>,
+    pub(super) event_rx: Arc<Mutex<Receiver<Event>>>,
+    pub(super) sockets: RwLock<HashMap<Sid, Socket>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -43,7 +47,7 @@ pub struct ServerOption {
 }
 
 #[derive(Default)]
-struct SidGenerator {
+pub(super) struct SidGenerator {
     seq: AtomicUsize,
 }
 
@@ -74,7 +78,7 @@ impl Server {
     }
 
     pub(crate) fn polling_buffer(&self) -> usize {
-        self.inner.buffer_size
+        self.inner.polling_buffer
     }
 
     pub(crate) fn generate_sid(&self) -> Sid {
@@ -104,10 +108,12 @@ impl Server {
         sid: Sid,
         transport: Box<dyn Transport>,
     ) -> Result<()> {
-        let (tx, _rx) = channel::<Event>(self.inner.event_size);
         let handshake = self.handshake_packet(vec!["webscocket".to_owned()], Some(sid.clone()));
         let socket = Socket::new(
-            transport, handshake, tx, false, // server no need to pong
+            transport,
+            handshake,
+            self.inner.event_tx.clone(),
+            false, // server no need to pong
             true,
         );
 
