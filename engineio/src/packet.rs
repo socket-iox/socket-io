@@ -226,7 +226,7 @@ impl Index<usize> for Payload {
     }
 }
 
-pub fn build_polling_payload(mut byte_vec: VecDeque<Bytes>) -> Option<String> {
+pub(crate) fn build_polling_payload(mut byte_vec: VecDeque<Bytes>) -> Option<String> {
     let mut payload = String::new();
     while let Some(bytes) = byte_vec.pop_front() {
         if *bytes.first()? == b'b' {

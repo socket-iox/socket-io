@@ -133,7 +133,11 @@ impl Websocket {
     }
 }
 
-pub async fn handle_http(server: Server, stream: TcpStream, peer_addr: SocketAddr) -> Result<()> {
+pub(crate) async fn handle_http(
+    server: Server,
+    stream: TcpStream,
+    peer_addr: SocketAddr,
+) -> Result<()> {
     // TODO: tls
     match peek_request_type(&stream, &peer_addr, server.max_payload()).await {
         Some(RequestType::WsUpgrade(sid)) => {

@@ -31,6 +31,7 @@ struct ServerInner {
     id_generator: SidGenerator,
     polling_handles: Arc<Mutex<HashMap<Sid, PollingHandle>>>,
     buffer_size: usize,
+    event_size: usize,
     sockets: RwLock<HashMap<Sid, Socket>>,
 }
 
@@ -68,19 +69,23 @@ impl Server {
         Ok(())
     }
 
-    pub fn polling_handles(&self) -> Arc<Mutex<HashMap<Sid, PollingHandle>>> {
+    pub(crate) fn polling_handles(&self) -> Arc<Mutex<HashMap<Sid, PollingHandle>>> {
         self.inner.polling_handles.clone()
     }
 
-    pub fn polling_buffer(&self) -> usize {
+    pub(crate) fn polling_buffer(&self) -> usize {
         self.inner.buffer_size
     }
 
-    pub fn generate_sid(&self) -> Sid {
+    pub(crate) fn generate_sid(&self) -> Sid {
         self.inner.id_generator.generate()
     }
 
-    pub fn handshake_packet(&self, upgrades: Vec<String>, sid: Option<Sid>) -> HandshakePacket {
+    pub(crate) fn handshake_packet(
+        &self,
+        upgrades: Vec<String>,
+        sid: Option<Sid>,
+    ) -> HandshakePacket {
         let sid = match sid {
             Some(sid) => sid,
             None => self.inner.id_generator.generate(),
@@ -94,8 +99,12 @@ impl Server {
         }
     }
 
-    pub async fn store_transport(&self, sid: Sid, transport: Box<dyn Transport>) -> Result<()> {
-        let (tx, _rx) = channel::<Event>(self.inner.buffer_size);
+    pub(crate) async fn store_transport(
+        &self,
+        sid: Sid,
+        transport: Box<dyn Transport>,
+    ) -> Result<()> {
+        let (tx, _rx) = channel::<Event>(self.inner.event_size);
         let handshake = self.handshake_packet(vec!["webscocket".to_owned()], Some(sid.clone()));
         let socket = Socket::new(
             transport, handshake, tx, false, // server no need to pong
@@ -109,7 +118,7 @@ impl Server {
         Ok(())
     }
 
-    pub fn start_ping_pong(&self, sid: &Sid) {
+    pub(crate) fn start_ping_pong(&self, sid: &Sid) {
         let sid = sid.to_owned();
         let server = self.clone();
         let option = server.inner.server_option;
