@@ -30,6 +30,7 @@ tokio = "1.16.1"
 tokio-util = "0.7.3"
 tokio-tungstenite = { version = "0.17.2" }
 tungstenite = "0.17.3"
+tracing = "0.1"
 http = "0.2.8"
 httparse = "1.6.0"
 reqwest = { version = "0.11.12", features = [
@@ -40,5 +41,6 @@ reqwest = { version = "0.11.12", features = [
 
 [dev-dependencies]
 tokio = { version = "1.16.1", features = ["macros"] }
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 
 [lib]
