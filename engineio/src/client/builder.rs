@@ -3,6 +3,7 @@ use std::sync::Arc;
 use futures_util::StreamExt;
 use reqwest::Url;
 use tokio::sync::mpsc::channel;
+use tracing::trace;
 
 use crate::{
     error::Result,
@@ -54,6 +55,7 @@ impl ClientBuilder {
     }
 
     async fn handshake_with_transport<T: Transport>(&mut self, transport: &mut T) -> Result<()> {
+        trace!("client handshake_with_transport {:?}", self.handshake);
         // No need to handshake twice
         if self.handshake.is_some() {
             return Ok(());
@@ -64,6 +66,7 @@ impl ClientBuilder {
         let handshake: HandshakePacket =
             Packet::try_from(transport.next().await.ok_or(Error::IncompletePacket())??)?
                 .try_into()?;
+        trace!("handshake packet {:?}", handshake);
 
         // update the base_url with the new sid
         url.query_pairs_mut().append_pair("sid", &handshake.sid[..]);
@@ -76,6 +79,7 @@ impl ClientBuilder {
     }
 
     async fn handshake(&mut self) -> Result<()> {
+        trace!("client handshake");
         if self.handshake.is_some() {
             return Ok(());
         }
@@ -120,6 +124,7 @@ impl ClientBuilder {
 
     /// Build socket with a polling transport then upgrade to websocket transport
     pub async fn build_websocket_with_upgrade(mut self) -> Result<Client> {
+        trace!("build_websocket_with_upgrade");
         self.handshake().await?;
 
         if self.websocket_upgrade()? {
@@ -169,6 +174,7 @@ impl ClientBuilder {
     }
 
     pub async fn build_polling(mut self) -> Result<Client> {
+        trace!("build_polling");
         self.handshake().await?;
 
         // Make a polling transport with new sid
