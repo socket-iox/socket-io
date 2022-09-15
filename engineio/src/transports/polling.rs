@@ -6,11 +6,12 @@ use std::{
     time::SystemTime,
 };
 
+use async_stream::try_stream;
 use async_trait::async_trait;
 use bytes::{BufMut, Bytes, BytesMut};
-use futures_util::{ready, FutureExt, Stream};
+use futures_util::{ready, FutureExt, Stream, StreamExt};
 use http::HeaderMap;
-use reqwest::{Client, ClientBuilder, Url};
+use reqwest::{Client, ClientBuilder, Response, Url};
 use tokio::sync::{
     mpsc::{Receiver, Sender},
     Mutex,
@@ -22,10 +23,13 @@ use crate::{
     Error,
 };
 
-#[derive(Debug, Clone)]
+type ClientPollStream = Box<dyn Stream<Item = Result<Bytes>> + 'static + Send>;
+
+#[derive(Clone)]
 pub struct ClientPollingTransport {
     client: Client,
     url: Url,
+    stream: Arc<Mutex<Pin<ClientPollStream>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -34,21 +38,59 @@ pub struct ServerPollingTransport {
     receiver: Arc<Mutex<Receiver<Bytes>>>,
 }
 
+impl Debug for ClientPollingTransport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientPollingTransport")
+            .field("url", &self.url)
+            .field("client", &self.client)
+            .finish()
+    }
+}
+
 impl ClientPollingTransport {
     pub(crate) fn new(mut url: Url, headers: Option<HeaderMap>) -> Result<Self> {
         let mut builder = ClientBuilder::new();
         if let Some(headers) = headers {
             builder = builder.default_headers(headers);
         }
-        let client = builder.build()?;
+        let client = builder.no_proxy().build()?;
         url.query_pairs_mut().append_pair("transport", "polling");
 
-        Ok(Self { client, url })
+        Ok(Self {
+            stream: Arc::new(Mutex::new(Self::stream(url.clone(), client.clone()))),
+            client,
+            url,
+        })
     }
 
     #[cfg(test)]
     fn url(&self) -> Url {
         self.url.clone()
+    }
+
+    fn send_request(url: Url, client: Client) -> impl Stream<Item = Result<Response>> {
+        try_stream! {
+            let url = append_hash(&url);
+
+            yield client
+                .get(url)
+                .send().await?
+        }
+    }
+
+    fn stream(
+        url: Url,
+        client: Client,
+    ) -> Pin<Box<dyn Stream<Item = Result<Bytes>> + 'static + Send>> {
+        Box::pin(try_stream! {
+            loop {
+                for await elem in Self::send_request(url.clone(), client.clone()) {
+                    for await bytes in elem?.bytes_stream() {
+                        yield bytes?;
+                    }
+                }
+            }
+        })
     }
 }
 
@@ -85,13 +127,8 @@ impl Stream for ClientPollingTransport {
     type Item = Result<Bytes>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match ready!(Box::pin(self.client.get(append_hash(&self.url)).send()).poll_unpin(cx)) {
-            Ok(resp) => match ready!(Box::pin(resp.bytes()).poll_unpin(cx)) {
-                Ok(bytes) => Poll::Ready(Some(Ok(bytes))),
-                Err(e) => Poll::Ready(Some(Err(Error::HttpError(e)))),
-            },
-            Err(e) => Poll::Ready(Some(Err(Error::HttpError(e)))),
-        }
+        let mut fut = ready!(Box::pin(self.stream.lock()).poll_unpin(cx));
+        fut.poll_next_unpin(cx)
     }
 }
 
