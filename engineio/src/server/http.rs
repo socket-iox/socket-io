@@ -1,17 +1,19 @@
+use std::{borrow::Cow, collections::VecDeque, net::SocketAddr};
+use std::{str::from_utf8, sync::Arc};
+
 use bytes::Bytes;
 use futures_util::SinkExt;
 use futures_util::{future::poll_fn, StreamExt};
 use http::Response;
 use httparse::{Request, Status, EMPTY_HEADER};
 use reqwest::Url;
-use std::{borrow::Cow, collections::VecDeque, net::SocketAddr};
-use std::{str::from_utf8, sync::Arc};
 use tokio::net::TcpStream;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, ReadBuf},
     sync::mpsc::{channel, Receiver, Sender},
 };
 use tokio_tungstenite::{accept_async, MaybeTlsStream, WebSocketStream};
+use tracing::trace;
 use tungstenite::Message;
 
 use crate::{
@@ -83,6 +85,7 @@ impl Polling {
     }
 
     async fn polling_get(server: &Server, sid: &Sid) -> Option<String> {
+        trace!("polling get {}", sid);
         let handles = server.polling_handles();
         let mut handles = handles.lock().await;
         if let Some((_, rx)) = handles.get_mut(sid) {
@@ -99,6 +102,7 @@ impl Polling {
     }
 
     async fn polling_post(server: &Server, sid: &Sid, data: Bytes) {
+        trace!("polling post {} {:?}", sid, data);
         let handles = server.polling_handles();
         let mut handles = handles.lock().await;
 
@@ -235,7 +239,7 @@ pub(crate) fn parse_request_type(buf: &[u8], addr: &SocketAddr) -> Option<Reques
         _ => return None,
     };
 
-    if req.method? != "GET" && req.method? != "POST" {
+    if req.method?.to_uppercase() != "GET" && req.method?.to_uppercase() != "POST" {
         return None;
     }
 
@@ -245,26 +249,26 @@ pub(crate) fn parse_request_type(buf: &[u8], addr: &SocketAddr) -> Option<Reques
     let mut sid = None;
 
     for (query_key, query_value) in url.query_pairs() {
-        if query_key == "EIO" && query_value != "4" {
+        if query_key.to_uppercase() == "EIO" && query_value != "4" {
             return None;
         }
-        if query_key == "sid" {
+        if query_key.to_lowercase() == "sid" {
             sid = Some(Arc::new(query_value.to_string()));
         }
     }
 
     for header in req.headers {
-        if header.name == "Upgrade" && req.method? == "GET" {
+        if header.name.to_lowercase() == "upgrade" && req.method?.to_uppercase() == "GET" {
             return Some(RequestType::WsUpgrade(sid));
         }
 
-        if header.name == "Content-Length" {
+        if header.name.to_lowercase() == "content-length" {
             let len_str = from_utf8(header.value).ok()?;
             content_length = len_str.parse().ok()?;
         }
     }
 
-    if req.method? == "POST" {
+    if req.method?.to_uppercase() == "POST" {
         let body_bytes = Bytes::from(buf[idx..idx + content_length].to_vec());
 
         if let Some(sid) = sid {
