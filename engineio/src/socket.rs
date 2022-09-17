@@ -14,6 +14,7 @@ use tokio::{
     sync::{mpsc::Sender, Mutex},
     time::Instant,
 };
+use tracing::trace;
 
 use crate::{
     error::Result,
@@ -44,7 +45,6 @@ pub enum Event {
 }
 
 impl Socket {
-    // TODO: fix too_many_arguments
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         transport: Box<dyn Transport>,
@@ -94,6 +94,7 @@ impl Socket {
     }
 
     async fn handle_incoming_packet(&self, packet: Packet) {
+        trace!("handle_incoming_packet {:?}", packet);
         // update last_pong on any packet, incoming data is a good sign of other side's liveness
         self.ponged().await;
         // check for the appropriate action or callback
@@ -151,10 +152,11 @@ impl Socket {
     pub async fn emit(&self, packet: Packet) -> Result<()> {
         if !self.connected.load(Ordering::Acquire) {
             let error = Error::IllegalActionBeforeOpen();
-            self.call_error_callback(format!("{}", error)).await;
+            self.on_error(format!("{}", error)).await;
             return Err(error);
         }
 
+        trace!("socket emit {:?}", packet);
         // send a post request with the encoded payload as body
         // if this is a binary attachment, then send the raw bytes
         let data = match packet.ptype {
@@ -166,7 +168,7 @@ impl Socket {
         let fut = lock.emit(data);
 
         if let Err(error) = fut.await {
-            self.call_error_callback(error.to_string()).await;
+            self.on_error(error.to_string()).await;
             return Err(error);
         }
 
@@ -175,7 +177,8 @@ impl Socket {
 
     /// Calls the error callback with a given message.
     #[inline]
-    async fn call_error_callback(&self, text: String) {
+    async fn on_error(&self, text: String) {
+        trace!("socket on_error {}", text);
         let _ = self.event_tx.send(Event::OnError(self.sid(), text)).await;
     }
 
@@ -223,6 +226,8 @@ impl Stream for Socket {
     ) -> Poll<Option<Self::Item>> {
         let mut lock = ready!(Box::pin(self.transport.lock()).poll_unpin(cx));
         let next = ready!(lock.poll_next_unpin(cx));
+
+        trace!("socket poll_next {:?} {:?}", lock, next);
 
         match next {
             Some(Ok(bytes)) => {
