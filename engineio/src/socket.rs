@@ -226,9 +226,6 @@ impl Stream for Socket {
     ) -> Poll<Option<Self::Item>> {
         let mut lock = ready!(Box::pin(self.transport.lock()).poll_unpin(cx));
         let next = ready!(lock.poll_next_unpin(cx));
-
-        trace!("socket poll_next {:?} {:?}", lock, next);
-
         match next {
             Some(Ok(bytes)) => {
                 let packets = Socket::parse_payload(bytes);

@@ -19,11 +19,18 @@ pub const ENGINE_IO_VERSION: i32 = 4;
 pub(crate) mod test {
     use reqwest::Url;
 
-    const RUST_SERVER_URL: &str = "http://127.0.0.1:4205";
+    const RUST_SERVER_URL: &str = "http://localhost:4205";
+    const RUST_TIMEOUT_SERVER_URL: &str = "http://localhost:4206";
 
     pub(crate) fn rust_engine_io_server() -> Url {
         let url =
             std::env::var("RUST_ENGINE_IO_SERVER").unwrap_or_else(|_| RUST_SERVER_URL.to_owned());
+        Url::parse(&url).unwrap()
+    }
+
+    pub(crate) fn rust_engine_io_timeout_server() -> Url {
+        let url = std::env::var("RUST_ENGINE_IO_TIMEOUT_SERVER")
+            .unwrap_or_else(|_| RUST_TIMEOUT_SERVER_URL.to_owned());
         Url::parse(&url).unwrap()
     }
 }

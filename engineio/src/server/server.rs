@@ -5,7 +5,6 @@ use std::{
 };
 
 use bytes::Bytes;
-use futures_util::{Stream, StreamExt};
 use tokio::{
     net::TcpListener,
     sync::{
@@ -165,6 +164,7 @@ impl Server {
                     _ => break,
                 }
             }
+            trace!("pong_timeout close {}", sid);
             server.close_socket(&sid).await;
         });
     }
@@ -204,16 +204,13 @@ impl SidGenerator {
     }
 }
 
-fn poll_stream(mut stream: impl Stream + Unpin + Send + 'static) {
-    tokio::spawn(async move { while stream.next().await.is_some() {} });
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
 
     use std::{sync::Arc, time::Duration};
 
+    use futures_util::{Stream, StreamExt};
     use reqwest::Url;
 
     use crate::{
@@ -225,7 +222,6 @@ mod test {
     #[tokio::test]
     async fn test_connection() -> Result<()> {
         // tracing_subscriber::fmt().with_env_filter("engineio=trace").init();
-
         let url = crate::test::rust_engine_io_server();
         let (mut rx, _server) = start_server(url.clone()).await;
 
@@ -246,11 +242,65 @@ mod test {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_pong_timeout() -> Result<()> {
+        // tracing_subscriber::fmt().with_env_filter("engineio=trace").init();
+        let url = crate::test::rust_engine_io_timeout_server();
+        let _ = start_server(url.clone()).await;
+
+        let socket = ClientBuilder::new(url.clone())
+            .should_pong_for_test(false)
+            .build_polling()
+            .await?;
+        test_transport_timeout(socket).await?;
+
+        let socket = ClientBuilder::new(url.clone())
+            .should_pong_for_test(false)
+            .build()
+            .await?;
+        test_transport_timeout(socket).await?;
+
+        let socket = ClientBuilder::new(url.clone())
+            .should_pong_for_test(false)
+            .build_websocket()
+            .await?;
+        test_transport_timeout(socket).await?;
+
+        let socket = ClientBuilder::new(url)
+            .should_pong_for_test(false)
+            .build_websocket_with_upgrade()
+            .await?;
+        test_transport_timeout(socket).await?;
+
+        Ok(())
+    }
+
+    async fn test_transport_timeout(mut client: Client) -> Result<()> {
+        client.connect().await?;
+
+        let client_clone = client.clone();
+        tokio::spawn(async move {
+            loop {
+                let next = client.next().await;
+                if next.is_none() {
+                    break;
+                }
+            }
+        });
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // closed by server
+        assert!(!client_clone.is_connected());
+
+        Ok(())
+    }
+
     async fn start_server(url: Url) -> (Receiver<String>, Server) {
         let port = url.port().unwrap();
         let server_option = ServerOption {
-            ping_timeout: 50,
-            ping_interval: 50,
+            ping_timeout: 20,
+            ping_interval: 20,
             max_payload: 1024,
         };
         let (server, rx) = setup(port, server_option);
@@ -349,5 +399,9 @@ mod test {
         assert!(!client.is_connected());
 
         Ok(())
+    }
+
+    fn poll_stream(mut stream: impl Stream + Unpin + Send + 'static) {
+        tokio::spawn(async move { while stream.next().await.is_some() {} });
     }
 }
