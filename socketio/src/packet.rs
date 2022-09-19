@@ -9,7 +9,7 @@ use std::{
 
 /// An enumeration of the different `Packet` types in the `socket.io` protocol.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub enum PacketId {
+pub enum PacketType {
     Connect = 0,
     Disconnect = 1,
     Event = 2,
@@ -22,7 +22,7 @@ pub enum PacketId {
 /// A packet which gets sent or received during in the `socket.io` protocol.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Packet {
-    pub packet_type: PacketId,
+    pub ptype: PacketType,
     pub nsp: String,
     pub data: Option<String>,
     pub id: Option<usize>,
@@ -33,7 +33,7 @@ pub struct Packet {
 impl Default for Packet {
     fn default() -> Self {
         Self {
-            packet_type: PacketId::Event,
+            ptype: PacketType::Event,
             nsp: String::from("/"),
             data: None,
             id: None,
@@ -43,24 +43,24 @@ impl Default for Packet {
     }
 }
 
-impl TryFrom<u8> for PacketId {
+impl TryFrom<u8> for PacketType {
     type Error = Error;
     fn try_from(b: u8) -> Result<Self> {
-        PacketId::try_from(b as char)
+        PacketType::try_from(b as char)
     }
 }
 
-impl TryFrom<char> for PacketId {
+impl TryFrom<char> for PacketType {
     type Error = Error;
     fn try_from(b: char) -> Result<Self> {
         match b {
-            '0' => Ok(PacketId::Connect),
-            '1' => Ok(PacketId::Disconnect),
-            '2' => Ok(PacketId::Event),
-            '3' => Ok(PacketId::Ack),
-            '4' => Ok(PacketId::ConnectError),
-            '5' => Ok(PacketId::BinaryEvent),
-            '6' => Ok(PacketId::BinaryAck),
+            '0' => Ok(PacketType::Connect),
+            '1' => Ok(PacketType::Disconnect),
+            '2' => Ok(PacketType::Event),
+            '3' => Ok(PacketType::Ack),
+            '4' => Ok(PacketType::ConnectError),
+            '5' => Ok(PacketType::BinaryEvent),
+            '6' => Ok(PacketType::BinaryAck),
             _ => Err(Error::InvalidPacketType(b)),
         }
     }
@@ -69,7 +69,7 @@ impl TryFrom<char> for PacketId {
 impl Packet {
     /// Creates an instance.
     pub const fn new(
-        packet_type: PacketId,
+        ptype: PacketType,
         nsp: String,
         data: Option<String>,
         id: Option<usize>,
@@ -77,7 +77,7 @@ impl Packet {
         attachments: Option<Vec<Bytes>>,
     ) -> Self {
         Packet {
-            packet_type,
+            ptype,
             nsp,
             data,
             id,
@@ -99,10 +99,10 @@ impl From<&Packet> for Bytes {
     /// stream as it gets handled and send by it's own logic via the socket.
     fn from(packet: &Packet) -> Bytes {
         // first the packet type
-        let mut string = (packet.packet_type as u8).to_string();
+        let mut string = (packet.ptype as u8).to_string();
 
         // eventually a number of attachments, followed by '-'
-        if let PacketId::BinaryAck | PacketId::BinaryEvent = packet.packet_type {
+        if let PacketType::BinaryAck | PacketType::BinaryEvent = packet.ptype {
             string.push_str(&packet.attachment_count.to_string());
             string.push('-');
         }
@@ -171,11 +171,10 @@ impl TryFrom<&Bytes> for Packet {
         let mut char_buf: Vec<char> = vec![];
 
         // packet_type
-        packet.packet_type =
-            PacketId::try_from(utf8_iter.next().ok_or(Error::IncompletePacket())?)?;
+        packet.ptype = PacketType::try_from(utf8_iter.next().ok_or(Error::IncompletePacket())?)?;
 
         // attachment_count
-        if let PacketId::BinaryAck | PacketId::BinaryEvent = packet.packet_type {
+        if let PacketType::BinaryAck | PacketType::BinaryEvent = packet.ptype {
             loop {
                 next_utf8 = utf8_iter.peek().ok_or(Error::IncompletePacket())?;
                 if *next_utf8 == '-' {
@@ -239,8 +238,8 @@ impl TryFrom<&Bytes> for Packet {
         let json_str: String = utf8_iter.into_iter().collect();
         let json_data: serde_json::Value = serde_json::from_str(&json_str).map_err(InvalidJson)?;
 
-        match packet.packet_type {
-            PacketId::BinaryAck | PacketId::BinaryEvent => {
+        match packet.ptype {
+            PacketType::BinaryAck | PacketType::BinaryEvent => {
                 let re_close = Regex::new(r",]$|]$").unwrap();
                 let mut str = json_data
                     .to_string()
@@ -290,7 +289,7 @@ mod test {
 
         assert_eq!(
             Packet::new(
-                PacketId::Connect,
+                PacketType::Connect,
                 "/".to_owned(),
                 Some(String::from("{\"token\":\"123\"}")),
                 None,
@@ -308,7 +307,7 @@ mod test {
 
         assert_eq!(
             Packet::new(
-                PacketId::Connect,
+                PacketType::Connect,
                 "/admin™".to_owned(),
                 Some(utf8_data),
                 None,
@@ -324,7 +323,7 @@ mod test {
 
         assert_eq!(
             Packet::new(
-                PacketId::Disconnect,
+                PacketType::Disconnect,
                 "/admin".to_owned(),
                 None,
                 None,
@@ -340,7 +339,7 @@ mod test {
 
         assert_eq!(
             Packet::new(
-                PacketId::Event,
+                PacketType::Event,
                 "/".to_owned(),
                 Some(String::from("[\"hello\",1]")),
                 None,
@@ -356,7 +355,7 @@ mod test {
 
         assert_eq!(
             Packet::new(
-                PacketId::Event,
+                PacketType::Event,
                 "/admin".to_owned(),
                 Some(String::from("[\"project:delete\",123]")),
                 Some(456),
@@ -372,7 +371,7 @@ mod test {
 
         assert_eq!(
             Packet::new(
-                PacketId::Ack,
+                PacketType::Ack,
                 "/admin".to_owned(),
                 Some(String::from("[]")),
                 Some(456),
@@ -388,7 +387,7 @@ mod test {
 
         assert_eq!(
             Packet::new(
-                PacketId::ConnectError,
+                PacketType::ConnectError,
                 "/admin".to_owned(),
                 Some(String::from("{\"message\":\"Not authorized\"}")),
                 None,
@@ -404,7 +403,7 @@ mod test {
 
         assert_eq!(
             Packet::new(
-                PacketId::BinaryEvent,
+                PacketType::BinaryEvent,
                 "/".to_owned(),
                 Some(String::from("\"hello\"")),
                 None,
@@ -422,7 +421,7 @@ mod test {
 
         assert_eq!(
             Packet::new(
-                PacketId::BinaryEvent,
+                PacketType::BinaryEvent,
                 "/admin".to_owned(),
                 Some(String::from("\"project:delete\"")),
                 Some(456),
@@ -438,7 +437,7 @@ mod test {
 
         assert_eq!(
             Packet::new(
-                PacketId::BinaryAck,
+                PacketType::BinaryAck,
                 "/admin".to_owned(),
                 None,
                 Some(456),
@@ -454,7 +453,7 @@ mod test {
     /// https://github.com/socketio/socket.io-protocol
     fn test_encode() {
         let packet = Packet::new(
-            PacketId::Connect,
+            PacketType::Connect,
             "/".to_owned(),
             Some(String::from("{\"token\":\"123\"}")),
             None,
@@ -468,7 +467,7 @@ mod test {
         );
 
         let packet = Packet::new(
-            PacketId::Connect,
+            PacketType::Connect,
             "/admin".to_owned(),
             Some(String::from("{\"token\":\"123\"}")),
             None,
@@ -482,7 +481,7 @@ mod test {
         );
 
         let packet = Packet::new(
-            PacketId::Disconnect,
+            PacketType::Disconnect,
             "/admin".to_owned(),
             None,
             None,
@@ -493,7 +492,7 @@ mod test {
         assert_eq!(Bytes::from(&packet), "1/admin,".to_string().into_bytes());
 
         let packet = Packet::new(
-            PacketId::Event,
+            PacketType::Event,
             "/".to_owned(),
             Some(String::from("[\"hello\",1]")),
             None,
@@ -507,7 +506,7 @@ mod test {
         );
 
         let packet = Packet::new(
-            PacketId::Event,
+            PacketType::Event,
             "/admin".to_owned(),
             Some(String::from("[\"project:delete\",123]")),
             Some(456),
@@ -523,7 +522,7 @@ mod test {
         );
 
         let packet = Packet::new(
-            PacketId::Ack,
+            PacketType::Ack,
             "/admin".to_owned(),
             Some(String::from("[]")),
             Some(456),
@@ -537,7 +536,7 @@ mod test {
         );
 
         let packet = Packet::new(
-            PacketId::ConnectError,
+            PacketType::ConnectError,
             "/admin".to_owned(),
             Some(String::from("{\"message\":\"Not authorized\"}")),
             None,
@@ -553,7 +552,7 @@ mod test {
         );
 
         let packet = Packet::new(
-            PacketId::BinaryEvent,
+            PacketType::BinaryEvent,
             "/".to_owned(),
             Some(String::from("\"hello\"")),
             None,
@@ -569,7 +568,7 @@ mod test {
         );
 
         let packet = Packet::new(
-            PacketId::BinaryEvent,
+            PacketType::BinaryEvent,
             "/admin".to_owned(),
             Some(String::from("\"project:delete\"")),
             Some(456),
@@ -585,7 +584,7 @@ mod test {
         );
 
         let packet = Packet::new(
-            PacketId::BinaryAck,
+            PacketType::BinaryAck,
             "/admin".to_owned(),
             None,
             Some(456),
@@ -602,8 +601,8 @@ mod test {
     }
 
     #[test]
-    fn test_illegal_packet_id() {
-        let _sut = PacketId::try_from(42).expect_err("error!");
+    fn test_illegal_packet_type() {
+        let _sut = PacketType::try_from(42).expect_err("error!");
         assert!(matches!(Error::InvalidPacketType(42 as char), _sut))
     }
 }
