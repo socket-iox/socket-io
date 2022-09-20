@@ -20,7 +20,7 @@ use crate::{
     packet::HandshakePacket,
     server::http::{handle_http, PollingHandle},
     socket::Socket,
-    transports::Transport,
+    transports::{Transport, TransportType},
     Event, Packet, PacketType, Sid,
 };
 
@@ -115,11 +115,7 @@ impl Server {
         }
     }
 
-    pub(crate) async fn store_transport(
-        &self,
-        sid: Sid,
-        transport: Box<dyn Transport>,
-    ) -> Result<()> {
+    pub(crate) async fn store_transport(&self, sid: Sid, transport: TransportType) -> Result<()> {
         trace!("store_transport {} {:?}", sid, transport);
         let handshake = self.handshake_packet(vec!["webscocket".to_owned()], Some(sid.clone()));
         let socket = Socket::new(
@@ -221,7 +217,7 @@ mod test {
 
     #[tokio::test]
     async fn test_connection() -> Result<()> {
-        // tracing_subscriber::fmt().with_env_filter("engineio=trace").init();
+        // tracing_subscriber::fmt() .with_env_filter("engineio=trace") .init();
         let url = crate::test::rust_engine_io_server();
         let (mut rx, _server) = start_server(url.clone()).await;
 
@@ -244,7 +240,7 @@ mod test {
 
     #[tokio::test]
     async fn test_pong_timeout() -> Result<()> {
-        // tracing_subscriber::fmt().with_env_filter("engineio=trace").init();
+        // tracing_subscriber::fmt() .with_env_filter("engineio=trace") .init();
         let url = crate::test::rust_engine_io_timeout_server();
         let _ = start_server(url.clone()).await;
 
@@ -288,7 +284,7 @@ mod test {
             }
         });
 
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
 
         // closed by server
         assert!(!client_clone.is_connected());

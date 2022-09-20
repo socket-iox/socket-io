@@ -43,7 +43,7 @@ impl DerefMut for Client {
 }
 
 impl Stream for Client {
-    type Item = Result<Vec<Packet>>;
+    type Item = Result<Packet>;
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,

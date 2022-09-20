@@ -8,6 +8,7 @@ use std::{
     task::{ready, Poll},
 };
 
+use async_stream::try_stream;
 use bytes::Bytes;
 use futures_util::{FutureExt, Stream, StreamExt};
 use tokio::{
@@ -19,18 +20,19 @@ use tracing::trace;
 use crate::{
     error::Result,
     packet::{HandshakePacket, Payload},
-    transports::{Data, Transport},
-    Error, Packet, PacketType, Sid,
+    transports::{Data, TransportType},
+    Error, Packet, PacketType, Sid, StreamGenerator,
 };
 
 #[derive(Clone)]
 pub struct Socket {
-    transport: Arc<Mutex<Box<dyn Transport>>>,
+    transport: Arc<Mutex<TransportType>>,
     event_tx: Arc<Sender<Event>>,
     connected: Arc<AtomicBool>,
     last_ping: Arc<Mutex<Instant>>,
     last_pong: Arc<Mutex<Instant>>,
     connection_data: Arc<HandshakePacket>,
+    generator: Arc<Mutex<StreamGenerator<Packet, Error>>>,
     server_end: bool,
     should_pong: bool,
 }
@@ -47,18 +49,19 @@ pub enum Event {
 impl Socket {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        transport: Box<dyn Transport>,
+        transport: TransportType,
         handshake: HandshakePacket,
         event_tx: Arc<Sender<Event>>,
         should_pong: bool,
         server_end: bool,
     ) -> Self {
         Socket {
-            transport: Arc::new(Mutex::new(transport)),
+            transport: Arc::new(Mutex::new(transport.clone())),
             connected: Arc::new(AtomicBool::default()),
             last_ping: Arc::new(Mutex::new(Instant::now())),
             last_pong: Arc::new(Mutex::new(Instant::now())),
             connection_data: Arc::new(handshake),
+            generator: Arc::new(Mutex::new(StreamGenerator::new(Self::stream(transport)))),
             event_tx,
             server_end,
             should_pong,
@@ -86,11 +89,6 @@ impl Socket {
         }
 
         Ok(())
-    }
-    pub(super) async fn handle_incoming_packets(&self, packets: Vec<Packet>) {
-        for packet in packets {
-            self.handle_incoming_packet(packet).await;
-        }
     }
 
     async fn handle_incoming_packet(&self, packet: Packet) {
@@ -127,12 +125,6 @@ impl Socket {
         Arc::clone(&self.connection_data.sid)
     }
 
-    fn parse_payload(bytes: Bytes) -> Result<Vec<Packet>> {
-        let payload = Payload::try_from(bytes)?;
-        let packets: Vec<Packet> = payload.into_iter().collect();
-        Ok(packets)
-    }
-
     pub async fn disconnect(&self) -> Result<()> {
         if !self.is_connected() {
             return Ok(());
@@ -165,7 +157,7 @@ impl Socket {
         };
 
         let lock = self.transport.lock().await;
-        let fut = lock.emit(data);
+        let fut = lock.as_transport().emit(data);
 
         if let Err(error) = fut.await {
             self.on_error(error.to_string()).await;
@@ -215,31 +207,53 @@ impl Socket {
 
         self.connected.store(false, Ordering::Release);
     }
-}
 
-impl Stream for Socket {
-    type Item = Result<Vec<Packet>>;
+    /// Helper method that parses bytes and returns an iterator over the elements.
+    fn parse_payload(bytes: Bytes) -> impl Stream<Item = Result<Packet>> {
+        try_stream! {
+            let payload = Payload::try_from(bytes);
 
-    fn poll_next(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        let mut lock = ready!(Box::pin(self.transport.lock()).poll_unpin(cx));
-        let next = ready!(lock.poll_next_unpin(cx));
-        match next {
-            Some(Ok(bytes)) => {
-                let packets = Socket::parse_payload(bytes);
-                if let Ok(packets) = &packets {
-                    ready!(Box::pin(self.handle_incoming_packets(packets.clone())).poll_unpin(cx));
-                }
-                Poll::Ready(Some(packets))
+            for elem in payload?.into_iter() {
+                trace!("parse_payload yield {:?}", elem);
+                yield elem;
             }
-            Some(Err(e)) => Poll::Ready(Some(Err(e))),
-            None => Poll::Ready(None),
         }
+    }
+
+    /// Creates a stream over the incoming packets, uses the streams provided by the
+    /// underlying transport types.
+    fn stream(
+        mut transport: TransportType,
+    ) -> Pin<Box<impl Stream<Item = Result<Packet>> + 'static + Send>> {
+        // map the byte stream of the underlying transport
+        // to a packet stream
+        Box::pin(try_stream! {
+            for await payload in transport.as_pin_box() {
+                for await packet in Self::parse_payload(payload?) {
+                    yield packet?;
+                }
+            }
+        })
     }
 }
 
+impl Stream for Socket {
+    type Item = Result<Packet>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let mut lock = ready!(Box::pin(self.generator.lock()).poll_unpin(cx));
+        let item = lock.poll_next_unpin(cx);
+        if let Poll::Ready(Some(Ok(packet))) = &item {
+            ready!(Box::pin(self.handle_incoming_packet(packet.clone())).poll_unpin(cx));
+        }
+        item
+    }
+}
+
+// impl Stre
 #[cfg_attr(tarpaulin, ignore)]
 impl Debug for Socket {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

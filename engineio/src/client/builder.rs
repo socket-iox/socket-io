@@ -10,7 +10,9 @@ use crate::{
     header::HeaderMap,
     packet::HandshakePacket,
     socket::Socket,
-    transports::{polling::ClientPollingTransport, websocket::WebsocketTransport, Transport},
+    transports::{
+        polling::ClientPollingTransport, websocket::WebsocketTransport, Transport, TransportType,
+    },
     Error, Event, Packet, ENGINE_IO_VERSION,
 };
 
@@ -159,7 +161,7 @@ impl ClientBuilder {
                 // SAFETY: handshake function called previously.
                 Ok(Client::new(
                     Socket::new(
-                        Box::new(transport),
+                        TransportType::Websocket(transport),
                         self.handshake.unwrap(),
                         Arc::new(tx),
                         self.should_pong,
@@ -186,7 +188,7 @@ impl ClientBuilder {
         // SAFETY: handshake function called previously.
         Ok(Client::new(
             Socket::new(
-                Box::new(transport),
+                TransportType::ClientPolling(transport),
                 self.handshake.unwrap(),
                 Arc::new(tx),
                 self.should_pong,

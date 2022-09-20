@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::VecDeque, net::SocketAddr};
+use std::{borrow::Cow, collections::VecDeque, net::SocketAddr, time::Duration};
 use std::{str::from_utf8, sync::Arc};
 
 use bytes::Bytes;
@@ -19,7 +19,7 @@ use tungstenite::Message;
 use crate::{
     error::Result,
     packet::build_polling_payload,
-    transports::{polling::ServerPollingTransport, websocket::WebsocketTransport},
+    transports::{polling::ServerPollingTransport, websocket::WebsocketTransport, TransportType},
     Error,
 };
 use crate::{Packet, PacketType, Sid};
@@ -43,12 +43,9 @@ impl Polling {
             Some(RequestType::PollingOpen) => {
                 let sid = server.generate_sid();
                 let transport = Self::polling_transport(&server, sid.clone()).await;
+                let transport = TransportType::ServerPolling(transport);
 
-                if server
-                    .store_transport(sid.clone(), Box::new(transport))
-                    .await
-                    .is_ok()
-                {
+                if server.store_transport(sid.clone(), transport).await.is_ok() {
                     write_stream(&mut stream, 200, Some(Self::handshake_body(&server, sid))).await
                 } else {
                     write_stream(&mut stream, 500, None).await
@@ -87,18 +84,24 @@ impl Polling {
     async fn polling_get(server: &Server, sid: &Sid) -> Option<String> {
         trace!("polling get {}", sid);
         let handles = server.polling_handles();
-        let mut handles = handles.lock().await;
-        if let Some((_, rx)) = handles.get_mut(sid) {
-            let mut byte_vec = VecDeque::new();
-            while let Ok(bytes) = rx.try_recv() {
-                byte_vec.push_back(bytes);
+        loop {
+            let mut lock = handles.lock().await;
+            match lock.get_mut(sid) {
+                None => return None,
+                Some((_, rx)) => {
+                    let mut byte_vec = VecDeque::new();
+                    while let Ok(bytes) = rx.try_recv() {
+                        byte_vec.push_back(bytes);
+                    }
+                    if let Some(payload) = build_polling_payload(byte_vec) {
+                        return Some(payload);
+                    };
+                }
             }
-            match build_polling_payload(byte_vec) {
-                Some(payload) => return Some(payload),
-                None => return Some(PacketType::Noop.into()),
-            };
+            drop(lock);
+            // TODO: read from config, will affect pong timeout
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        None
     }
 
     async fn polling_post(server: &Server, sid: &Sid, data: Bytes) {
@@ -130,8 +133,9 @@ impl Websocket {
 
         let (sender, receiver) = ws_stream.split();
         let transport = WebsocketTransport::new(sender, receiver);
+        let transport = TransportType::Websocket(transport);
 
-        server.store_transport(sid, Box::new(transport)).await?;
+        server.store_transport(sid, transport).await?;
 
         Ok(())
     }
