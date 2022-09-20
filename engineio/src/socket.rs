@@ -183,7 +183,7 @@ impl Socket {
     }
 
     // Check if the underlying transport client is connected.
-    pub(crate) fn is_connected(&self) -> bool {
+    pub fn is_connected(&self) -> bool {
         self.connected.load(Ordering::Acquire)
     }
 

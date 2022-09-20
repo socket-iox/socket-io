@@ -1,13 +1,16 @@
-pub mod client;
-pub mod error;
-pub mod header;
-pub mod packet;
-pub mod server;
+pub(crate) mod client;
+pub(crate) mod error;
+pub(crate) mod generator;
+pub(crate) mod header;
+pub(crate) mod packet;
+pub(crate) mod server;
 pub(crate) mod socket;
 pub(crate) mod transports;
 
+pub use client::Client;
 pub use error::Error;
 pub(crate) use error::Result;
+pub use generator::{Generator, StreamGenerator};
 pub use packet::{Packet, PacketType};
 pub use socket::Event;
 
