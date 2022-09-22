@@ -221,7 +221,7 @@ pub(crate) async fn peek_request_type(
     let mut buf = ReadBuf::new(&mut buf);
 
     poll_fn(|cx| stream.poll_peek(cx, &mut buf)).await.ok()?;
-    parse_request_type(buf.filled(), addr)
+    parse_request_type(buf.filled(), addr, true)
 }
 
 async fn read_request_type(
@@ -232,10 +232,14 @@ async fn read_request_type(
     let mut buf = vec![0; max_payload];
     let n = stream.read(&mut buf).await.ok()?;
 
-    parse_request_type(&buf[0..n], addr)
+    parse_request_type(&buf[0..n], addr, false)
 }
 
-pub(crate) fn parse_request_type(buf: &[u8], addr: &SocketAddr) -> Option<RequestType> {
+pub(crate) fn parse_request_type(
+    buf: &[u8],
+    addr: &SocketAddr,
+    is_peek: bool,
+) -> Option<RequestType> {
     let mut header_buf = [EMPTY_HEADER; MAX_HEADERS];
     let mut req = Request::new(&mut header_buf);
     let (req, idx) = match req.parse(buf) {
@@ -273,7 +277,11 @@ pub(crate) fn parse_request_type(buf: &[u8], addr: &SocketAddr) -> Option<Reques
     }
 
     if req.method?.to_uppercase() == "POST" {
-        let body_bytes = Bytes::from(buf[idx..idx + content_length].to_vec());
+        let body_bytes = if is_peek {
+            Bytes::new()
+        } else {
+            Bytes::from(buf[idx..idx + content_length].to_vec())
+        };
 
         if let Some(sid) = sid {
             return Some(RequestType::PollingPost(sid, body_bytes));
