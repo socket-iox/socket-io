@@ -6,11 +6,17 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+async-stream = "0.3.3"
 base64 = "0.13.0"
 bytes = "1"
 engineio = { version = "0.1.0", path = "../engineio" }
+futures-util = { version = "0.3", default-features = false, features = [
+  "sink",
+] }
 serde_json = "1.0"
 thiserror = "1.0"
+tokio = "1.16.1"
+tokio-util = "0.7.3"
 url = "2.2.2"
 regex = "1.6.0"
 
