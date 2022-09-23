@@ -1,8 +1,5 @@
-use std::sync::Arc;
-
 use futures_util::StreamExt;
 use reqwest::Url;
-use tokio::sync::mpsc::channel;
 use tracing::trace;
 
 use crate::{
@@ -13,13 +10,11 @@ use crate::{
     transports::{
         polling::ClientPollingTransport, websocket::WebsocketTransport, Transport, TransportType,
     },
-    Error, Event, Packet, ENGINE_IO_VERSION,
+    Error, Packet, ENGINE_IO_VERSION,
 };
 
-use super::Client;
-
 #[derive(Clone, Debug)]
-pub struct ClientBuilder {
+pub struct SocketBuilder {
     url: Url,
     should_pong: bool,
     headers: Option<HeaderMap>,
@@ -27,7 +22,7 @@ pub struct ClientBuilder {
     channel_size: usize,
 }
 
-impl ClientBuilder {
+impl SocketBuilder {
     pub fn new(url: Url) -> Self {
         let mut url = url;
         url.query_pairs_mut()
@@ -37,7 +32,7 @@ impl ClientBuilder {
         if url.path() == "/" {
             url.set_path("/engine.io/");
         }
-        ClientBuilder {
+        SocketBuilder {
             url,
             headers: None,
             should_pong: true,
@@ -99,13 +94,24 @@ impl ClientBuilder {
     }
 
     /// Build websocket if allowed, if not fall back to polling
-    pub async fn build(mut self) -> Result<Client> {
+    pub async fn build(mut self) -> Result<Socket> {
         self.handshake().await?;
 
         if self.websocket_upgrade()? {
             self.build_websocket_with_upgrade().await
         } else {
             self.build_polling().await
+        }
+    }
+
+    /// Build websocket if allowed, if not allowed or errored fall back to polling.
+    /// WARNING: websocket errors suppressed, no indication of websocket success or failure.
+    pub async fn build_with_fallback(self) -> Result<Socket> {
+        let result = self.clone().build().await;
+        if result.is_err() {
+            self.build_polling().await
+        } else {
+            result
         }
     }
 
@@ -125,7 +131,7 @@ impl ClientBuilder {
     }
 
     /// Build socket with a polling transport then upgrade to websocket transport
-    pub async fn build_websocket_with_upgrade(mut self) -> Result<Client> {
+    pub async fn build_websocket_with_upgrade(mut self) -> Result<Socket> {
         trace!("build_websocket_with_upgrade");
         self.handshake().await?;
 
@@ -137,7 +143,7 @@ impl ClientBuilder {
     }
 
     /// Build socket with only a websocket transport
-    pub async fn build_websocket(mut self) -> Result<Client> {
+    pub async fn build_websocket(mut self) -> Result<Socket> {
         let headers = if let Some(map) = self.headers.clone() {
             Some(map.try_into()?)
         } else {
@@ -156,18 +162,14 @@ impl ClientBuilder {
                     self.handshake_with_transport(&mut transport).await?;
                 }
 
-                let (tx, rx) = channel::<Event>(self.channel_size);
                 // NOTE: Although self.url contains the sid, it does not propagate to the transport
                 // SAFETY: handshake function called previously.
-                Ok(Client::new(
-                    Socket::new(
-                        TransportType::Websocket(transport),
-                        self.handshake.unwrap(),
-                        Arc::new(tx),
-                        self.should_pong,
-                        false,
-                    ),
-                    rx,
+                Ok(Socket::new(
+                    TransportType::Websocket(transport),
+                    self.handshake.unwrap(),
+                    None,
+                    self.should_pong,
+                    false,
                 ))
             }
             // TODO: tls
@@ -175,7 +177,7 @@ impl ClientBuilder {
         }
     }
 
-    pub async fn build_polling(mut self) -> Result<Client> {
+    pub async fn build_polling(mut self) -> Result<Socket> {
         trace!("build_polling");
         self.handshake().await?;
 
@@ -184,17 +186,13 @@ impl ClientBuilder {
         let transport =
             ClientPollingTransport::new(self.url, self.headers.map(|v| v.try_into().unwrap()))?;
 
-        let (tx, rx) = channel::<Event>(self.channel_size);
         // SAFETY: handshake function called previously.
-        Ok(Client::new(
-            Socket::new(
-                TransportType::ClientPolling(transport),
-                self.handshake.unwrap(),
-                Arc::new(tx),
-                self.should_pong,
-                false,
-            ),
-            rx,
+        Ok(Socket::new(
+            TransportType::ClientPolling(transport),
+            self.handshake.unwrap(),
+            None,
+            self.should_pong,
+            false,
         ))
     }
 

@@ -95,6 +95,13 @@ impl Packet {
             data: data.into(),
         }
     }
+
+    pub fn noop() -> Self {
+        Packet {
+            ptype: PacketType::Noop,
+            data: Bytes::new(),
+        }
+    }
 }
 
 impl TryFrom<Bytes> for Packet {

@@ -20,7 +20,7 @@ use crate::{
     packet::HandshakePacket,
     server::http::{handle_http, PollingHandle},
     socket::Socket,
-    transports::{Transport, TransportType},
+    transports::TransportType,
     Event, Packet, PacketType, Sid,
 };
 
@@ -84,8 +84,28 @@ impl Server {
         sockets.get(sid).map(|x| x.to_owned())
     }
 
+    pub async fn close_socket(&self, sid: &Sid) {
+        let mut sockets = self.inner.sockets.write().await;
+        if let Some(socket) = sockets.remove(sid) {
+            drop(sockets);
+            let _ = socket.disconnect().await;
+        }
+    }
+
     pub(crate) fn polling_handles(&self) -> Arc<Mutex<HashMap<Sid, PollingHandle>>> {
         self.inner.polling_handles.clone()
+    }
+
+    pub(crate) async fn polling_handle(&self, sid: &Sid) -> Option<PollingHandle> {
+        let lock = self.inner.polling_handles.lock().await;
+        let handle = lock.get(sid);
+        handle.cloned()
+    }
+
+    pub(crate) async fn drain_polling(&self, sid: &Sid) {
+        if let Some(socket) = self.socket(sid).await {
+            let _ = socket.emit(Packet::noop()).await;
+        }
     }
 
     pub(crate) fn polling_buffer(&self) -> usize {
@@ -115,13 +135,18 @@ impl Server {
         }
     }
 
-    pub(crate) async fn store_transport(&self, sid: Sid, transport: TransportType) -> Result<()> {
+    pub(crate) async fn store_transport(
+        &self,
+        sid: Sid,
+        transport: TransportType,
+        is_websocket: bool,
+    ) -> Result<()> {
         trace!("store_transport {} {:?}", sid, transport);
         let handshake = self.handshake_packet(vec!["webscocket".to_owned()], Some(sid.clone()));
         let socket = Socket::new(
             transport,
             handshake,
-            self.inner.event_tx.clone(),
+            Some(self.inner.event_tx.clone()),
             false, // server no need to pong
             true,
         );
@@ -131,6 +156,10 @@ impl Server {
         let mut sockets = self.inner.sockets.write().await;
         let _ = sockets.insert(sid.clone(), socket);
         self.start_ping_pong(&sid);
+
+        if is_websocket {
+            // self.drop_polling(&sid).await;
+        }
         Ok(())
     }
 
@@ -173,14 +202,6 @@ impl Server {
         let sockets = self.inner.sockets.read().await;
         Some(sockets.get(sid)?.last_pong().await)
     }
-
-    async fn close_socket(&self, sid: &Sid) {
-        let mut sockets = self.inner.sockets.write().await;
-        if let Some(socket) = sockets.remove(sid) {
-            drop(sockets);
-            let _ = socket.disconnect().await;
-        }
-    }
 }
 
 impl Default for ServerOption {
@@ -209,11 +230,7 @@ mod test {
     use futures_util::{Stream, StreamExt};
     use reqwest::Url;
 
-    use crate::{
-        client::{builder::ClientBuilder, Client},
-        server::builder::ServerBuilder,
-        Packet,
-    };
+    use crate::{server::builder::ServerBuilder, socket::SocketBuilder, Packet};
 
     #[tokio::test]
     async fn test_connection() -> Result<()> {
@@ -221,16 +238,16 @@ mod test {
         let url = crate::test::rust_engine_io_server();
         let (mut rx, _server) = start_server(url.clone()).await;
 
-        let socket = ClientBuilder::new(url.clone()).build_polling().await?;
+        let socket = SocketBuilder::new(url.clone()).build_polling().await?;
         test_data_transport(socket, &mut rx).await?;
 
-        let socket = ClientBuilder::new(url.clone()).build().await?;
+        let socket = SocketBuilder::new(url.clone()).build().await?;
         test_data_transport(socket, &mut rx).await?;
 
-        let socket = ClientBuilder::new(url.clone()).build_websocket().await?;
+        let socket = SocketBuilder::new(url.clone()).build_websocket().await?;
         test_data_transport(socket, &mut rx).await?;
 
-        let socket = ClientBuilder::new(url)
+        let socket = SocketBuilder::new(url)
             .build_websocket_with_upgrade()
             .await?;
         test_data_transport(socket, &mut rx).await?;
@@ -244,25 +261,25 @@ mod test {
         let url = crate::test::rust_engine_io_timeout_server();
         let _ = start_server(url.clone()).await;
 
-        let socket = ClientBuilder::new(url.clone())
+        let socket = SocketBuilder::new(url.clone())
             .should_pong_for_test(false)
             .build_polling()
             .await?;
         test_transport_timeout(socket).await?;
 
-        let socket = ClientBuilder::new(url.clone())
+        let socket = SocketBuilder::new(url.clone())
             .should_pong_for_test(false)
             .build()
             .await?;
         test_transport_timeout(socket).await?;
 
-        let socket = ClientBuilder::new(url.clone())
+        let socket = SocketBuilder::new(url.clone())
             .should_pong_for_test(false)
             .build_websocket()
             .await?;
         test_transport_timeout(socket).await?;
 
-        let socket = ClientBuilder::new(url)
+        let socket = SocketBuilder::new(url)
             .should_pong_for_test(false)
             .build_websocket_with_upgrade()
             .await?;
@@ -271,7 +288,7 @@ mod test {
         Ok(())
     }
 
-    async fn test_transport_timeout(mut client: Client) -> Result<()> {
+    async fn test_transport_timeout(mut client: Socket) -> Result<()> {
         client.connect().await?;
 
         let client_clone = client.clone();
@@ -351,7 +368,7 @@ mod test {
         (server, rx)
     }
 
-    async fn test_data_transport(client: Client, server_rx: &mut Receiver<String>) -> Result<()> {
+    async fn test_data_transport(client: Socket, server_rx: &mut Receiver<String>) -> Result<()> {
         client.connect().await?;
 
         let client_clone = client.clone();

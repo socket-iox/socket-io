@@ -1,4 +1,3 @@
-pub(crate) mod client;
 pub(crate) mod error;
 pub(crate) mod generator;
 pub(crate) mod header;
@@ -7,14 +6,15 @@ pub(crate) mod server;
 pub(crate) mod socket;
 pub(crate) mod transports;
 
-pub use client::Client;
 pub use error::Error;
 pub(crate) use error::Result;
 pub use generator::{Generator, StreamGenerator};
+pub use header::{HeaderMap, HeaderName, HeaderValue};
 pub use packet::{Packet, PacketType};
-pub use socket::Event;
+pub use server::{Server, ServerBuilder, ServerOption};
+pub use socket::{Event, Socket, SocketBuilder};
 
-pub(crate) type Sid = std::sync::Arc<String>;
+pub type Sid = std::sync::Arc<String>;
 
 pub const ENGINE_IO_VERSION: i32 = 4;
 

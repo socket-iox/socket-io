@@ -72,6 +72,7 @@ impl TransportType {
         }
     }
 
+    #[allow(clippy::redundant_allocation)]
     pub fn as_pin_box(&mut self) -> std::pin::Pin<Box<&mut (dyn Transport + Send)>> {
         match self {
             TransportType::ClientPolling(transport) => Box::pin(transport),

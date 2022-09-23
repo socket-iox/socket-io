@@ -27,7 +27,7 @@ use crate::{
 #[derive(Clone)]
 pub struct Socket {
     transport: Arc<Mutex<TransportType>>,
-    event_tx: Arc<Sender<Event>>,
+    event_tx: Option<Arc<Sender<Event>>>,
     connected: Arc<AtomicBool>,
     last_ping: Arc<Mutex<Instant>>,
     last_pong: Arc<Mutex<Instant>>,
@@ -51,7 +51,7 @@ impl Socket {
     pub(crate) fn new(
         transport: TransportType,
         handshake: HandshakePacket,
-        event_tx: Arc<Sender<Event>>,
+        event_tx: Option<Arc<Sender<Event>>>,
         should_pong: bool,
         server_end: bool,
     ) -> Self {
@@ -68,16 +68,14 @@ impl Socket {
         }
     }
 
-    pub(crate) async fn last_pong(&self) -> Instant {
-        *(self.last_pong.lock().await)
-    }
-
     /// Opens the connection to a specified server. The first Pong packet is sent
     /// to the server to trigger the Ping-cycle.
     pub async fn connect(&self) -> Result<()> {
         // SAFETY: Has valid handshake due to type
         self.connected.store(true, Ordering::Release);
-        self.event_tx.send(Event::OnOpen(self.sid())).await?;
+        if let Some(ref event_tx) = self.event_tx {
+            event_tx.send(Event::OnOpen(self.sid())).await?;
+        }
 
         // set the last ping to now and set the connected state
         *self.last_ping.lock().await = Instant::now();
@@ -89,6 +87,10 @@ impl Socket {
         }
 
         Ok(())
+    }
+
+    pub(crate) async fn last_pong(&self) -> Instant {
+        *(self.last_pong.lock().await)
     }
 
     async fn handle_incoming_packet(&self, packet: Packet) {
@@ -130,7 +132,9 @@ impl Socket {
             return Ok(());
         }
 
-        self.event_tx.send(Event::OnClose(self.sid())).await?;
+        if let Some(ref event_tx) = self.event_tx {
+            event_tx.send(Event::OnClose(self.sid())).await?;
+        }
 
         self.emit(Packet::new(PacketType::Close, Bytes::new()))
             .await?;
@@ -171,7 +175,9 @@ impl Socket {
     #[inline]
     async fn on_error(&self, text: String) {
         trace!("socket on_error {}", text);
-        let _ = self.event_tx.send(Event::OnError(self.sid(), text)).await;
+        if let Some(ref event_tx) = self.event_tx {
+            let _ = event_tx.send(Event::OnError(self.sid(), text)).await;
+        }
     }
 
     // Check if the underlying transport client is connected.
@@ -188,22 +194,24 @@ impl Socket {
     }
 
     pub(crate) async fn handle_packet(&self, packet: Packet) {
-        let _ = self
-            .event_tx
-            .send(Event::OnPacket(self.sid(), packet))
-            .await;
+        if let Some(ref event_tx) = self.event_tx {
+            let _ = event_tx.send(Event::OnPacket(self.sid(), packet)).await;
+        }
     }
 
     pub(crate) async fn handle_data(&self, data: Bytes) {
-        let _ = self.event_tx.send(Event::OnData(self.sid(), data)).await;
+        if let Some(ref event_tx) = self.event_tx {
+            let _ = event_tx.send(Event::OnData(self.sid(), data)).await;
+        }
     }
 
     pub(crate) async fn handle_close(&self) {
         if !self.is_connected() {
             return;
         }
-
-        let _ = self.event_tx.send(Event::OnClose(self.sid())).await;
+        if let Some(ref event_tx) = self.event_tx {
+            let _ = event_tx.send(Event::OnClose(self.sid())).await;
+        }
 
         self.connected.store(false, Ordering::Release);
     }
@@ -241,7 +249,7 @@ impl Stream for Socket {
     type Item = Result<Packet>;
 
     fn poll_next(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
         let mut lock = ready!(Box::pin(self.generator.lock()).poll_unpin(cx));

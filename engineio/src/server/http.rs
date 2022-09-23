@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::VecDeque, net::SocketAddr, time::Duration};
+use std::{borrow::Cow, collections::VecDeque, net::SocketAddr};
 use std::{str::from_utf8, sync::Arc};
 
 use bytes::Bytes;
@@ -7,11 +7,11 @@ use futures_util::{future::poll_fn, StreamExt};
 use http::Response;
 use httparse::{Request, Status, EMPTY_HEADER};
 use reqwest::Url;
-use tokio::net::TcpStream;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, ReadBuf},
     sync::mpsc::{channel, Receiver, Sender},
 };
+use tokio::{net::TcpStream, sync::Mutex};
 use tokio_tungstenite::{accept_async, MaybeTlsStream, WebSocketStream};
 use tracing::trace;
 use tungstenite::Message;
@@ -29,7 +29,7 @@ use super::Server;
 /// Limit for the number of header lines.
 const MAX_HEADERS: usize = 124;
 
-pub type PollingHandle = (Sender<Bytes>, Receiver<Bytes>);
+pub type PollingHandle = (Arc<Sender<Bytes>>, Arc<Mutex<Receiver<Bytes>>>);
 
 pub(crate) struct Polling {}
 
@@ -45,7 +45,11 @@ impl Polling {
                 let transport = Self::polling_transport(&server, sid.clone()).await;
                 let transport = TransportType::ServerPolling(transport);
 
-                if server.store_transport(sid.clone(), transport).await.is_ok() {
+                if server
+                    .store_transport(sid.clone(), transport, false)
+                    .await
+                    .is_ok()
+                {
                     write_stream(&mut stream, 200, Some(Self::handshake_body(&server, sid))).await
                 } else {
                     write_stream(&mut stream, 500, None).await
@@ -76,32 +80,35 @@ impl Polling {
 
         let handles = server.polling_handles();
         let mut handles = handles.lock().await;
-        handles.insert(sid.clone(), (recv_tx, send_rx));
+        handles.insert(
+            sid.clone(),
+            (Arc::new(recv_tx), Arc::new(Mutex::new(send_rx))),
+        );
 
         ServerPollingTransport::new(send_tx, recv_rx)
     }
 
     async fn polling_get(server: &Server, sid: &Sid) -> Option<String> {
         trace!("polling get {}", sid);
-        let handles = server.polling_handles();
-        loop {
-            let mut lock = handles.lock().await;
-            match lock.get_mut(sid) {
-                None => return None,
-                Some((_, rx)) => {
-                    let mut byte_vec = VecDeque::new();
-                    while let Ok(bytes) = rx.try_recv() {
-                        byte_vec.push_back(bytes);
-                    }
-                    if let Some(payload) = build_polling_payload(byte_vec) {
-                        return Some(payload);
-                    };
-                }
-            }
-            drop(lock);
-            // TODO: read from config, will affect pong timeout
-            tokio::time::sleep(Duration::from_millis(100)).await;
+        let handle = match server.polling_handle(sid).await {
+            None => return None,
+            Some(handle) => handle,
+        };
+
+        let rx = &mut handle.1.lock().await;
+        let mut byte_vec = VecDeque::new();
+
+        if let Some(bytes) = rx.recv().await {
+            byte_vec.push_back(bytes);
         }
+
+        while let Ok(bytes) = rx.try_recv() {
+            byte_vec.push_back(bytes);
+        }
+
+        let r = build_polling_payload(byte_vec);
+        trace!("polling get {} {:?}", sid, r);
+        r
     }
 
     async fn polling_post(server: &Server, sid: &Sid, data: Bytes) {
@@ -135,7 +142,7 @@ impl Websocket {
         let transport = WebsocketTransport::new(sender, receiver);
         let transport = TransportType::Websocket(transport);
 
-        server.store_transport(sid, transport).await?;
+        server.store_transport(sid, transport, true).await?;
 
         Ok(())
     }
@@ -169,6 +176,8 @@ async fn handle_probe(
             ws_stream.send(message).await?;
         }
     }
+
+    server.drain_polling(&sid).await;
 
     if let Some(Ok(Message::Text(packet))) = ws_stream.next().await {
         // PacketType::Upgrade
@@ -277,10 +286,13 @@ pub(crate) fn parse_request_type(
     }
 
     if req.method?.to_uppercase() == "POST" {
+        let end = idx + content_length;
         let body_bytes = if is_peek {
             Bytes::new()
-        } else {
+        } else if end <= buf.len() {
             Bytes::from(buf[idx..idx + content_length].to_vec())
+        } else {
+            return None;
         };
 
         if let Some(sid) = sid {
