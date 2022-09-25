@@ -219,7 +219,7 @@ impl TryFrom<&Bytes> for Packet {
         };
 
         loop {
-            if !next_utf8.is_digit(10) {
+            if !next_utf8.is_ascii_digit() {
                 break;
             }
             char_buf.push(utf8_iter.next().unwrap()); // SAFETY: already peeked
@@ -301,7 +301,7 @@ mod test {
 
         let utf8_data = "{\"token™\":\"123\"}".to_owned();
         let utf8_payload = format!("0/admin™,{}", utf8_data);
-        let payload = Bytes::from(utf8_payload.clone());
+        let payload = Bytes::from(utf8_payload);
         let packet = Packet::try_from(&payload);
         assert!(packet.is_ok());
 

@@ -8,22 +8,21 @@ use crate::{
 use async_stream::try_stream;
 use bytes::Bytes;
 use engineio::{
-    Client as EngineClient, Event as EngineEvent, Packet as EnginePacket,
-    PacketType as EnginePacketType, StreamGenerator,
+    Packet as EnginePacket, PacketType as EnginePacketType, Socket as EngineSocket, StreamGenerator,
 };
 use futures_util::{FutureExt, Stream, StreamExt};
 use tokio::sync::Mutex;
 
 #[derive(Clone)]
 pub(crate) struct Socket {
-    engine_client: Arc<EngineClient>,
+    engine_client: Arc<EngineSocket>,
     generator: Arc<Mutex<StreamGenerator<Packet, Error>>>,
     is_server: bool,
 }
 
 impl Socket {
     /// Creates an instance of `Socket`.
-    pub(super) fn client_end(engine_client: EngineClient) -> Self {
+    pub(super) fn client_end(engine_client: EngineSocket) -> Self {
         Socket {
             engine_client: Arc::new(engine_client.clone()),
             generator: Arc::new(Mutex::new(StreamGenerator::new(Self::stream(
@@ -33,7 +32,7 @@ impl Socket {
         }
     }
 
-    pub(super) fn server_end(engine_client: EngineClient) -> Self {
+    pub(super) fn server_end(engine_client: EngineSocket) -> Self {
         Socket {
             engine_client: Arc::new(engine_client.clone()),
             generator: Arc::new(Mutex::new(StreamGenerator::new(Self::stream(
@@ -157,7 +156,7 @@ impl Socket {
         }
     }
 
-    fn stream(client: EngineClient) -> Pin<Box<impl Stream<Item = Result<Packet>> + Send>> {
+    fn stream(client: EngineSocket) -> Pin<Box<impl Stream<Item = Result<Packet>> + Send>> {
         Box::pin(try_stream! {
             for await received_data in client.clone() {
                 let packet = received_data?;
@@ -172,7 +171,7 @@ impl Socket {
     /// Handles new incoming engineio packets
     async fn handle_engineio_packet(
         packet: EnginePacket,
-        mut client: EngineClient,
+        mut client: EngineSocket,
     ) -> Result<Packet> {
         let mut socket_packet = Packet::try_from(&packet.data)?;
 
@@ -194,7 +193,6 @@ impl Socket {
                             return Err(Error::InvalidAttachmentPacketType(packet.ptype.into()));
                         }
                     },
-                    _ => continue,
                 }
             }
             socket_packet.attachments = Some(attachments);
