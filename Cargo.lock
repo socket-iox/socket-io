@@ -161,7 +161,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "engineio"
+name = "engineio-rs"
 version = "0.1.0"
 dependencies = [
  "adler32",
@@ -949,13 +949,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "socketio"
+name = "socketio-rs"
 version = "0.1.0"
 dependencies = [
  "async-stream",
  "base64",
  "bytes",
- "engineio",
+ "engineio-rs",
  "futures-util",
  "regex",
  "serde_json",

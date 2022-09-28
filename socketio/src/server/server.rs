@@ -2,7 +2,7 @@ use crate::{
     ack::AckId, callback::Callback, error::Result, packet::PacketType,
     server::Client as ServerClient, socket::Socket, Error, Event, NameSpace, Payload,
 };
-use engineio::{Event as EngineEvent, Server as EngineServer, Sid as EngineSid};
+use engineio_rs::{Event as EngineEvent, Server as EngineServer, Sid as EngineSid};
 use futures_util::{future::BoxFuture, StreamExt};
 use serde_json::json;
 use std::{

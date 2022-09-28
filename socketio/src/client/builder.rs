@@ -1,5 +1,5 @@
 use crate::ack::AckId;
-use engineio::{HeaderMap, HeaderValue, SocketBuilder as EngineSocketBuilder};
+use engineio_rs::{HeaderMap, HeaderValue, SocketBuilder as EngineSocketBuilder};
 use futures_util::{future::BoxFuture, StreamExt};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;

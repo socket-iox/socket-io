@@ -1,6 +1,6 @@
 use futures_util::FutureExt;
 use serde_json::json;
-use socketio::{Payload, ServerBuilder, ServerClient};
+use socketio_rs::{Payload, ServerBuilder, ServerClient};
 
 #[tokio::main]
 async fn main() {

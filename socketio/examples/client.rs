@@ -1,6 +1,6 @@
 use futures_util::FutureExt;
 use serde_json::json;
-use socketio::{Client, ClientBuilder, Payload};
+use socketio_rs::{Client, ClientBuilder, Payload};
 use std::time::Duration;
 
 #[tokio::main]

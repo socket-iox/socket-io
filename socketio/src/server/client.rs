@@ -1,6 +1,6 @@
 use std::{collections::HashMap, fmt::Debug, ops::Deref, pin::Pin, sync::Arc, time::Duration};
 
-use engineio::Sid;
+use engineio_rs::Sid;
 use futures_util::{future::BoxFuture, Stream, StreamExt};
 use tokio::sync::RwLock;
 

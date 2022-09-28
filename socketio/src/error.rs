@@ -39,7 +39,7 @@ pub enum Error {
     #[error("Error while parsing an integer")]
     InvalidInteger(#[from] ParseIntError),
     #[error("EngineIO Error")]
-    IncompleteResponseFromEngineIo(#[from] engineio::Error),
+    IncompleteResponseFromEngineIo(#[from] engineio_rs::Error),
     #[error("Invalid packet type while reading attachments")]
     InvalidAttachmentPacketType(u8),
 }

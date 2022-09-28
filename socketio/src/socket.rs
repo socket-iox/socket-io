@@ -7,7 +7,7 @@ use crate::{
 };
 use async_stream::try_stream;
 use bytes::Bytes;
-use engineio::{
+use engineio_rs::{
     Packet as EnginePacket, PacketType as EnginePacketType, Socket as EngineSocket, StreamGenerator,
 };
 use futures_util::{FutureExt, Stream, StreamExt};

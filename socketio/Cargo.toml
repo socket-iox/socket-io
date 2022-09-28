@@ -1,7 +1,18 @@
 [package]
-name = "socketio"
+name = "socketio-rs"
 version = "0.1.0"
 edition = "2021"
+description = "An implementation of a socketio written in rust."
+repository = "https://github.com/socket-iox/socket-io"
+keywords = ["socketio", "engineio", "network", "protocol"]
+categories = [
+  "network-programming",
+  "web-programming",
+  "web-programming::websocket",
+  "web-programming::socketio",
+]
+license = "MIT"
+
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -9,7 +20,7 @@ edition = "2021"
 async-stream = "0.3.3"
 base64 = "0.13.0"
 bytes = "1"
-engineio = { version = "0.1.0", path = "../engineio" }
+engineio-rs = { version = "0.1.0", path = "../engineio" }
 futures-util = { version = "0.3", default-features = false, features = [
   "sink",
 ] }

@@ -2,7 +2,7 @@ use crate::server::server::Server;
 use crate::{callback::Callback, server::client::Client};
 use crate::{AckId, NameSpace};
 use crate::{Event, Payload};
-use engineio::{ServerBuilder as EngineServerBuilder, ServerOption};
+use engineio_rs::{ServerBuilder as EngineServerBuilder, ServerOption};
 use futures_util::future::BoxFuture;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
