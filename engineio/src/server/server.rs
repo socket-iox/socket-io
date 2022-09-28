@@ -135,12 +135,7 @@ impl Server {
         }
     }
 
-    pub(crate) async fn store_transport(
-        &self,
-        sid: Sid,
-        transport: TransportType,
-        is_websocket: bool,
-    ) -> Result<()> {
+    pub(crate) async fn store_transport(&self, sid: Sid, transport: TransportType) -> Result<()> {
         trace!("store_transport {} {:?}", sid, transport);
         let handshake = self.handshake_packet(vec!["webscocket".to_owned()], Some(sid.clone()));
         let socket = Socket::new(
@@ -157,9 +152,6 @@ impl Server {
         let _ = sockets.insert(sid.clone(), socket);
         self.start_ping_pong(&sid);
 
-        if is_websocket {
-            // self.drop_polling(&sid).await;
-        }
         Ok(())
     }
 

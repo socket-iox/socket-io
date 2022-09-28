@@ -45,11 +45,7 @@ impl Polling {
                 let transport = Self::polling_transport(&server, sid.clone()).await;
                 let transport = TransportType::ServerPolling(transport);
 
-                if server
-                    .store_transport(sid.clone(), transport, false)
-                    .await
-                    .is_ok()
-                {
+                if server.store_transport(sid.clone(), transport).await.is_ok() {
                     write_stream(&mut stream, 200, Some(Self::handshake_body(&server, sid))).await
                 } else {
                     write_stream(&mut stream, 500, None).await
@@ -142,7 +138,7 @@ impl Websocket {
         let transport = WebsocketTransport::new(sender, receiver);
         let transport = TransportType::Websocket(transport);
 
-        server.store_transport(sid, transport, true).await?;
+        server.store_transport(sid, transport).await?;
 
         Ok(())
     }
