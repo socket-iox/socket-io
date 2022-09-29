@@ -50,6 +50,14 @@ impl Client {
         }
     }
 
+    pub fn sid(&self) -> Sid {
+        self.sid.clone()
+    }
+
+    pub fn namespace(&self) -> String {
+        self.client.nsp.clone()
+    }
+
     pub async fn join<T: Into<String>>(&self, rooms: Vec<T>) {
         self.server
             .join(&self.client.nsp, rooms, self.sid.clone())
