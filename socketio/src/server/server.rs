@@ -1,6 +1,6 @@
 use crate::{
-    ack::AckId, callback::Callback, error::Result, packet::PacketType,
-    server::Client as ServerClient, socket::Socket, Error, Event, NameSpace, Payload,
+    ack::AckId, callback::Callback, packet::PacketType, server::Client as ServerClient,
+    socket::Socket, Error, Event, NameSpace, Payload,
 };
 use engineio_rs::{Event as EngineEvent, Server as EngineServer, Sid as EngineSid};
 use futures_util::{future::BoxFuture, StreamExt};
@@ -14,7 +14,7 @@ use std::{
     time::Duration,
 };
 use tokio::sync::RwLock;
-use tracing::trace;
+use tracing::{error, trace};
 
 type Sid = Arc<String>;
 type Room = String;
@@ -36,6 +36,96 @@ impl Server {
         self.engine_server.serve().await
     }
 
+    pub async fn emit_to<E, D>(self: &Arc<Self>, nsp: &str, rooms: Vec<&str>, event: E, data: D)
+    where
+        E: Into<Event>,
+        D: Into<Payload>,
+    {
+        let event = event.into();
+        let payload = data.into();
+
+        let sids_to_emit = self.sids_to_emit(nsp, rooms).await;
+
+        for sid in sids_to_emit {
+            if let Some(client) = self.client(&sid, nsp).await {
+                let event = event.clone();
+                let payload = payload.clone();
+
+                tokio::spawn(async move {
+                    let r = client.emit(event, payload).await;
+                    if r.is_err() {
+                        error!("emit_to {} failed {:?}", sid, r);
+                    }
+                });
+            }
+        }
+    }
+
+    pub async fn emit_to_with_ack<F, E, D>(
+        &self,
+        nsp: &str,
+        rooms: Vec<&str>,
+        event: E,
+        data: D,
+        timeout: Duration,
+        callback: F,
+    ) where
+        F: for<'a> std::ops::FnMut(Payload, ServerClient, Option<AckId>) -> BoxFuture<'static, ()>
+            + 'static
+            + Send
+            + Sync
+            + Clone,
+        E: Into<Event>,
+        D: Into<Payload>,
+    {
+        let event = event.into();
+        let payload = data.into();
+
+        for sid in self.sids_to_emit(nsp, rooms).await {
+            if let Some(client) = self.client(&sid, nsp).await {
+                let event = event.clone();
+                let payload = payload.clone();
+
+                let callback_clone = callback.clone();
+
+                tokio::spawn(async move {
+                    let r = client
+                        .emit_with_ack(
+                            event.clone(),
+                            payload.clone(),
+                            timeout,
+                            callback_clone.clone(),
+                        )
+                        .await;
+                    if r.is_err() {
+                        error!("emit_with_ack to {} {:?}", sid, r);
+                    }
+                });
+            }
+        }
+    }
+
+    async fn sids_to_emit(&self, nsp: &str, rooms: Vec<&str>) -> HashSet<Sid> {
+        let clients = self.rooms.read().await;
+        let mut sids_to_emit = HashSet::new();
+        if let Some(room_clients) = clients.get(nsp) {
+            for room_name in rooms {
+                match room_clients.get(room_name) {
+                    Some(room) => {
+                        for sid in room {
+                            sids_to_emit.insert(sid.clone());
+                        }
+                    }
+                    // room may be sid
+                    None => {
+                        let _ = sids_to_emit.insert(Arc::new(room_name.to_owned()));
+                    }
+                };
+            }
+        }
+        sids_to_emit
+    }
+
     pub(crate) fn recv_event(self: &Arc<Self>) {
         let event_rx = self.engine_server.event_rx();
         let server = self.to_owned();
@@ -55,87 +145,12 @@ impl Server {
         });
     }
 
-    pub(crate) async fn emit_to<E, D>(
-        self: &Arc<Self>,
-        nsp: &str,
-        rooms: Vec<&str>,
-        event: E,
-        data: D,
-    ) -> Result<()>
-    where
-        E: Into<Event>,
-        D: Into<Payload>,
-    {
-        let clients = self.rooms.read().await;
-        let event = event.into();
-        let payload = data.into();
-        if let Some(room_clients) = clients.get(nsp) {
-            for room_name in rooms {
-                if let Some(room) = room_clients.get(room_name) {
-                    for sid in room {
-                        if let Some(client) = self.client(sid, nsp).await {
-                            let event = event.clone();
-                            let payload = payload.clone();
-
-                            tokio::spawn(async move {
-                                let _ = client.emit(event, payload).await;
-                            });
-                        }
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
     pub(crate) async fn client(&self, sid: &Sid, nsp: &str) -> Option<ServerClient> {
         let clients = self.clients.read().await;
         if let Some(nsp_clients) = clients.get(sid) {
             return nsp_clients.get(nsp).cloned();
         }
         None
-    }
-
-    pub async fn emit_to_with_ack<F, E, D>(
-        &self,
-        nsp: &str,
-        rooms: Vec<&str>,
-        event: E,
-        data: D,
-        timeout: Duration,
-        callback: F,
-    ) -> Result<()>
-    where
-        F: for<'a> std::ops::FnMut(Payload, ServerClient, Option<AckId>) -> BoxFuture<'static, ()>
-            + 'static
-            + Send
-            + Sync
-            + Clone,
-        E: Into<Event>,
-        D: Into<Payload>,
-    {
-        let clients = self.rooms.read().await;
-        let event = event.into();
-        let payload = data.into();
-        if let Some(room_clients) = clients.get(nsp) {
-            for room_name in rooms {
-                if let Some(room) = room_clients.get(room_name) {
-                    for sid in room {
-                        if let Some(client) = self.client(sid, nsp).await {
-                            let _ = client
-                                .emit_with_ack(
-                                    event.clone(),
-                                    payload.clone(),
-                                    timeout,
-                                    callback.clone(),
-                                )
-                                .await;
-                        }
-                    }
-                }
-            }
-        }
-        Ok(())
     }
 
     pub(crate) async fn join<T: Into<String>>(
@@ -482,10 +497,7 @@ mod test {
             move |_payload: Payload, socket: ServerClient, _need_ack: Option<AckId>| {
                 async move {
                     socket.join(vec!["room 1"]).await;
-                    socket
-                        .emit_to(vec!["room 1"], "echo", json!(""))
-                        .await
-                        .expect("emit success");
+                    socket.emit_to(vec!["room 1"], "echo", json!("")).await;
                     socket.leave(vec!["room 1"]).await;
                 }
                 .boxed()
@@ -525,8 +537,7 @@ mod test {
                         Duration::from_millis(400),
                         server_recv_ack,
                     )
-                    .await
-                    .expect("success");
+                    .await;
                 socket.leave(vec!["room 2"]).await;
             }
             .boxed()

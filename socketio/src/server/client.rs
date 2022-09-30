@@ -68,7 +68,7 @@ impl Client {
         self.server.leave(&self.client.nsp, rooms, &self.sid).await;
     }
 
-    pub async fn emit_to<E, D>(&self, rooms: Vec<&str>, event: E, data: D) -> Result<()>
+    pub async fn emit_to<E, D>(&self, rooms: Vec<&str>, event: E, data: D)
     where
         E: Into<Event>,
         D: Into<Payload>,
@@ -85,8 +85,7 @@ impl Client {
         data: D,
         timeout: Duration,
         callback: F,
-    ) -> Result<()>
-    where
+    ) where
         F: for<'a> std::ops::FnMut(Payload, Self, Option<AckId>) -> BoxFuture<'static, ()>
             + 'static
             + Send

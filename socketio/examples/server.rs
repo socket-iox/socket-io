@@ -10,7 +10,7 @@ async fn main() {
     let callback = |_payload: Payload, socket: ServerClient, _| {
         async move {
             socket.join(vec!["room 1"]).await;
-            let _ = socket
+            socket
                 .emit_to(vec!["room 1"], "echo", json!({"got ack": true}))
                 .await;
         }
