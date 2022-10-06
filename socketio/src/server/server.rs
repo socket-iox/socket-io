@@ -1,6 +1,6 @@
 use crate::{
     ack::AckId, callback::Callback, packet::PacketType, server::Client as ServerClient,
-    socket::Socket, Error, Event, NameSpace, Payload,
+    socket::RawSocket, Error, Event, NameSpace, Payload,
 };
 use engineio_rs::{Event as EngineEvent, Server as EngineServer, Sid as EngineSid};
 use futures_util::{future::BoxFuture, StreamExt};
@@ -196,7 +196,7 @@ impl Server {
 
     async fn create_client(self: &Arc<Self>, esid: EngineSid) {
         if let Some(engine_socket) = self.engine_server.socket(&esid).await {
-            let socket = Socket::server_end(engine_socket);
+            let socket = RawSocket::server_end(engine_socket);
 
             // TODO: support multiple namespace
 
@@ -226,7 +226,7 @@ impl Server {
         None
     }
 
-    async fn handle_connect(self: &Arc<Self>, mut socket: Socket, esid: &EngineSid) {
+    async fn handle_connect(self: &Arc<Self>, mut socket: RawSocket, esid: &EngineSid) {
         let sid = self.sid_generator.generate(esid);
         while let Some(Ok(packet)) = socket.next().await {
             if packet.ptype == PacketType::Connect {
@@ -241,7 +241,7 @@ impl Server {
 
     async fn insert_clients(
         self: &Arc<Self>,
-        socket: Socket,
+        socket: RawSocket,
         nsp: String,
         sid: Sid,
         handshake: bool,

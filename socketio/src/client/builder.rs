@@ -9,7 +9,7 @@ use url::Url;
 use crate::{callback::Callback, error::Result, Error, Event, Payload};
 
 use super::client::Client;
-use crate::socket::Socket as InnerSocket;
+use crate::socket::RawSocket as InnerSocket;
 
 /// Flavor of Engine.IO transport.
 #[derive(Clone, Eq, PartialEq)]

@@ -5,13 +5,18 @@ use futures_util::{future::BoxFuture, Stream, StreamExt};
 use tokio::sync::RwLock;
 
 use crate::{
-    ack::AckId, callback::Callback, client::client::CommonClient, error::Result, packet::Packet,
-    server::server::Server, socket::Socket, Event, Payload,
+    ack::AckId,
+    callback::Callback,
+    error::Result,
+    packet::Packet,
+    server::server::Server,
+    socket::{RawSocket, Socket},
+    Event, Payload,
 };
 
 #[derive(Clone)]
 pub struct Client {
-    client: CommonClient<Self>,
+    socket: Socket<Self>,
     server: Arc<Server>,
     sid: Sid,
 }
@@ -24,7 +29,7 @@ impl Debug for Client {
 
 impl Client {
     pub(crate) fn new<T: Into<String>>(
-        socket: Socket,
+        socket: RawSocket,
         namespace: T,
         sid: Sid,
         on: Arc<RwLock<HashMap<Event, Callback<Self>>>>,
@@ -32,20 +37,20 @@ impl Client {
     ) -> Self {
         let server_clone = server.clone();
         let sid_clone = sid.clone();
-        let client = CommonClient::new(
+        let client = Socket::new(
             socket,
             namespace,
             on,
             Arc::new(move |c| Client {
                 sid: sid_clone.clone(),
-                client: c,
+                socket: c,
                 server: server_clone.clone(),
             }),
         );
 
         Self {
             sid,
-            client,
+            socket: client,
             server,
         }
     }
@@ -55,17 +60,17 @@ impl Client {
     }
 
     pub fn namespace(&self) -> String {
-        self.client.nsp.clone()
+        self.socket.nsp.clone()
     }
 
     pub async fn join<T: Into<String>>(&self, rooms: Vec<T>) {
         self.server
-            .join(&self.client.nsp, rooms, self.sid.clone())
+            .join(&self.socket.nsp, rooms, self.sid.clone())
             .await;
     }
 
     pub async fn leave(&self, rooms: Vec<&str>) {
-        self.server.leave(&self.client.nsp, rooms, &self.sid).await;
+        self.server.leave(&self.socket.nsp, rooms, &self.sid).await;
     }
 
     pub async fn emit_to<E, D>(&self, rooms: Vec<&str>, event: E, data: D)
@@ -74,7 +79,7 @@ impl Client {
         D: Into<Payload>,
     {
         self.server
-            .emit_to(&self.client.nsp, rooms, event, data)
+            .emit_to(&self.socket.nsp, rooms, event, data)
             .await
     }
 
@@ -95,15 +100,15 @@ impl Client {
         D: Into<Payload>,
     {
         self.server
-            .emit_to_with_ack(&self.client.nsp, rooms, event, data, timeout, callback)
+            .emit_to_with_ack(&self.socket.nsp, rooms, event, data, timeout, callback)
             .await
     }
 }
 
 impl Deref for Client {
-    type Target = CommonClient<Client>;
+    type Target = Socket<Client>;
     fn deref(&self) -> &Self::Target {
-        &self.client
+        &self.socket
     }
 }
 
@@ -114,6 +119,6 @@ impl Stream for Client {
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        self.client.poll_next_unpin(cx)
+        self.socket.poll_next_unpin(cx)
     }
 }

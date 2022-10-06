@@ -9,6 +9,7 @@ pub(crate) mod server;
 
 mod socket;
 
+pub use ack::AckId;
 pub use client::{Client, ClientBuilder, TransportType};
 pub use error::Error;
 pub use event::Event;
@@ -16,7 +17,6 @@ pub use payload::Payload;
 pub use server::{Client as ServerClient, Server, ServerBuilder};
 
 pub(crate) type NameSpace = String;
-pub use ack::AckId;
 
 #[cfg(test)]
 pub(crate) mod test {
