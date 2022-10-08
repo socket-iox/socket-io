@@ -1,5 +1,4 @@
 use futures_util::FutureExt;
-use serde_json::json;
 use socketio_rs::{Payload, ServerBuilder, ServerClient};
 
 #[tokio::main]
@@ -10,9 +9,7 @@ async fn main() {
     let callback = |_payload: Payload, socket: ServerClient, _| {
         async move {
             socket.join(vec!["room 1"]).await;
-            socket
-                .emit_to(vec!["room 1"], "echo", json!({"got ack": true}))
-                .await;
+            socket.emit_to(vec!["room 1"], "test", "foo").await;
         }
         .boxed()
     };

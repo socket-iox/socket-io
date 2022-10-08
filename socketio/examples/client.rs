@@ -56,5 +56,6 @@ async fn main() {
         .await
         .expect("Server unreachable");
 
+    tokio::time::sleep(Duration::from_secs(1)).await;
     socket.disconnect().await.expect("Disconnect failed");
 }

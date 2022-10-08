@@ -611,11 +611,12 @@ impl RawSocket {
                 Some(vec![bin_data]),
             )),
             Payload::String(str_data) => {
-                serde_json::from_str::<serde_json::Value>(&str_data)?;
-
                 let payload = match event {
                     None => format!("[{}]", str_data),
-                    Some(event) => format!("[\"{}\",{}]", String::from(event), str_data),
+                    Some(event) => match serde_json::from_str::<serde_json::Value>(&str_data) {
+                        Ok(_) => format!("[\"{}\",{}]", String::from(event), str_data),
+                        Err(_) => format!("[\"{}\",\"{}\"]", String::from(event), str_data),
+                    },
                 };
 
                 Ok(Packet::new(
