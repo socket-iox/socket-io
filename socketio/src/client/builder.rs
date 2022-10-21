@@ -42,8 +42,8 @@ impl ClientBuilder {
     /// path of the URL is optional and if no port is given, port 80
     /// will be used.
     /// # Example
-    /// ```rust
-    /// use rust_socketio::{Payload, asynchronous::{ClientBuilder, Client, AckId}};
+    /// ```no_run
+    /// use socketio_rs::{Payload, ClientBuilder, Client, AckId};
     /// use serde_json::json;
     /// use futures_util::future::FutureExt;
     ///
@@ -104,7 +104,7 @@ impl ClientBuilder {
     ///
     /// # Example
     /// ```rust
-    /// use rust_socketio::{asynchronous::ClientBuilder, Payload};
+    /// use socketio_rs::{ClientBuilder, Payload};
     /// use futures_util::FutureExt;
     ///
     ///  #[tokio::main]
@@ -140,7 +140,7 @@ impl ClientBuilder {
     /// is conform with the generic requirements. An example can be found here:
     ///
     /// ```rust
-    /// use rust_socketio::{asynchronous::ClientBuilder, Payload};
+    /// use socketio_rs::{ClientBuilder, Payload};
     /// use futures_util::FutureExt;
     ///
     /// #[tokio::main]
@@ -179,7 +179,7 @@ impl ClientBuilder {
     /// via the transport layer.
     /// # Example
     /// ```rust
-    /// use rust_socketio::{asynchronous::ClientBuilder, Payload};
+    /// use socketio_rs::{ClientBuilder, Payload};
     /// use futures_util::future::FutureExt;
     ///
     /// #[tokio::main]
@@ -209,8 +209,8 @@ impl ClientBuilder {
     /// Specifies which EngineIO [`TransportType`] to use.
     ///
     /// # Example
-    /// ```rust
-    /// use rust_socketio::{asynchronous::ClientBuilder, TransportType};
+    /// ```no_run
+    /// use socketio_rs::{ClientBuilder, TransportType};
     ///
     /// #[tokio::main]
     /// async fn main() {
@@ -233,8 +233,8 @@ impl ClientBuilder {
     /// value if something goes wrong during connection. Also starts a separate
     /// thread to start polling for packets. Used with callbacks.
     /// # Example
-    /// ```rust
-    /// use rust_socketio::{asynchronous::ClientBuilder, Payload};
+    /// ```no_run
+    /// use socketio_rs::{ClientBuilder, Payload};
     /// use serde_json::json;
     /// use futures_util::future::FutureExt;
     ///
@@ -277,8 +277,7 @@ impl ClientBuilder {
         Ok(socket)
     }
 
-    //TODO: 0.3.X stabilize
-    pub(crate) async fn connect_manual(self) -> Result<Client> {
+    pub async fn connect_manual(self) -> Result<Client> {
         // Parse url here rather than in new to keep new returning Self.
         let mut url = Url::parse(&self.address)?;
 

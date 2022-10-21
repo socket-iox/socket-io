@@ -11,8 +11,9 @@ mod socket;
 
 pub use ack::AckId;
 pub use client::{Client, ClientBuilder, TransportType};
-pub use error::Error;
+pub use error::{Error, Result};
 pub use event::Event;
+pub use packet::{Packet, PacketType};
 pub use payload::Payload;
 pub use server::{Client as ServerClient, Server, ServerBuilder};
 

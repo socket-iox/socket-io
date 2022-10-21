@@ -255,6 +255,8 @@ impl Server {
                 self.clone(),
             );
 
+            client.handle_connect().await;
+
             poll_client(client.clone());
 
             if handshake {

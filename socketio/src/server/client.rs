@@ -3,6 +3,7 @@ use std::{collections::HashMap, fmt::Debug, ops::Deref, pin::Pin, sync::Arc, tim
 use engineio_rs::Sid;
 use futures_util::{future::BoxFuture, Stream, StreamExt};
 use tokio::sync::RwLock;
+use tracing::trace;
 
 use crate::{
     ack::AckId,
@@ -53,6 +54,11 @@ impl Client {
             socket: client,
             server,
         }
+    }
+
+    pub(crate) async fn handle_connect(&self) {
+        trace!("handle_connect");
+        let _ = self.socket.handle_connect().await;
     }
 
     pub fn sid(&self) -> Sid {

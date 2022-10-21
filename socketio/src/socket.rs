@@ -99,8 +99,8 @@ impl<C: Clone> Socket<C> {
     /// a library like `serde_json` to serialize the data properly.
     ///
     /// # Example
-    /// ```
-    /// use rust_socketio::{asynchronous::{ClientBuilder, Client, AckId}, Payload};
+    /// ```no_run
+    /// use socketio_rs::{ClientBuilder, Client, AckId, Payload};
     /// use serde_json::json;
     /// use futures_util::FutureExt;
     ///
@@ -158,8 +158,8 @@ impl<C: Clone> Socket<C> {
     /// Disconnects this client from the server by sending a `socket.io` closing
     /// packet.
     /// # Example
-    /// ```rust
-    /// use rust_socketio::{asynchronous::{ClientBuilder, Client, AckId}, Payload};
+    /// ```no_run
+    /// use socketio_rs::{ClientBuilder, Client, AckId, Payload};
     /// use serde_json::json;
     /// use futures_util::{FutureExt, future::BoxFuture};
     ///
@@ -221,8 +221,8 @@ impl<C: Clone> Socket<C> {
     /// Please note that the requirements on the provided callbacks are similar to the ones
     /// for [`crate::asynchronous::ClientBuilder::on`].
     /// # Example
-    /// ```
-    /// use rust_socketio::{asynchronous::{ClientBuilder, Client}, Payload};
+    /// ```no_run
+    /// use socketio_rs::{ClientBuilder, Client, Payload};
     /// use serde_json::json;
     /// use std::time::Duration;
     /// use std::thread::sleep;
@@ -301,8 +301,10 @@ impl<C: Clone> Socket<C> {
     ) -> Result<()> {
         let mut on = self.on.write().await;
         let lock = on.deref_mut();
+        trace!("callback on keys {:?}", lock.keys());
         if let Some(callback) = lock.get_mut(event) {
             let c = (self.callback_client_fn)((self).clone());
+            trace!("do callback {:?}", event);
             callback(payload.into(), c, need_ack).await;
         }
         drop(on);
@@ -413,6 +415,13 @@ impl<C: Clone> Socket<C> {
         Ok(())
     }
 
+    pub(crate) async fn handle_connect(&self) -> Result<()> {
+        self.is_connected.store(true, Ordering::Release);
+        trace!("callback connect");
+        self.callback(&Event::Connect, "", None).await?;
+        Ok(())
+    }
+
     /// Handles the incoming messages and classifies what callbacks to call and how.
     /// This method is later registered as the callback for the `on_data` event of the
     /// engineio client.
@@ -431,10 +440,7 @@ impl<C: Clone> Socket<C> {
                         self.callback(&Event::Error, err.to_string(), None).await?;
                     }
                 }
-                PacketType::Connect => {
-                    self.is_connected.store(true, Ordering::Release);
-                    self.callback(&Event::Connect, "", None).await?;
-                }
+                PacketType::Connect => self.handle_connect().await?,
                 PacketType::Disconnect => {
                     self.is_connected.store(false, Ordering::Release);
                     self.callback(&Event::Close, "", None).await?;
@@ -543,6 +549,7 @@ impl RawSocket {
     /// Sends a `socket.io` packet to the server using the `engine.io` client.
     pub async fn send(&self, packet: Packet) -> Result<()> {
         if !self.is_engineio_connected() {
+            trace!("socket emit before open {:?}", packet);
             return Err(Error::IllegalActionBeforeOpen());
         }
 

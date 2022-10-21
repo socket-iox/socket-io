@@ -44,7 +44,7 @@ pub enum Error {
     InvalidAttachmentPacketType(u8),
 }
 
-pub(crate) type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 impl<T> From<std::sync::PoisonError<T>> for Error {
     fn from(_: std::sync::PoisonError<T>) -> Self {

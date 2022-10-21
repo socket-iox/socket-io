@@ -43,28 +43,35 @@ impl Client {
     }
 }
 
-// TODO: move CommonClient to Socket
-
 #[cfg(test)]
 mod test {
-
     use std::time::Duration;
+
+    use crate::{
+        test::socket_io_server, AckId, Client, ClientBuilder, Event, Packet, PacketType, Payload,
+        Result, ServerBuilder, ServerClient,
+    };
 
     use bytes::Bytes;
     use futures_util::{FutureExt, StreamExt};
     use serde_json::json;
     use tokio::time::sleep;
 
-    use crate::{
-        client::{builder::ClientBuilder, client::Client},
-        error::Result,
-        packet::{Packet, PacketType},
-        Payload, TransportType,
-    };
-
     #[tokio::test]
+    async fn test_client() -> Result<()> {
+        // tracing_subscriber::fmt()
+        //     .with_env_filter("engineio=trace,socketio=trace,integration=trace")
+        //     .init();
+        setup_server();
+
+        socket_io_integration().await?;
+        socket_io_builder_integration().await?;
+        socket_io_builder_integration_iterator().await?;
+        Ok(())
+    }
+
     async fn socket_io_integration() -> Result<()> {
-        let url = crate::test::socket_io_server();
+        let url = socket_io_server();
 
         let socket = ClientBuilder::new(url)
             .on("test", |msg, _, _| {
@@ -120,9 +127,8 @@ mod test {
         Ok(())
     }
 
-    #[tokio::test]
     async fn socket_io_builder_integration() -> Result<()> {
-        let url = crate::test::socket_io_server();
+        let url = socket_io_server();
 
         // test socket build logic
         let socket_builder = ClientBuilder::new(url);
@@ -165,9 +171,8 @@ mod test {
         Ok(())
     }
 
-    #[tokio::test]
     async fn socket_io_builder_integration_iterator() -> Result<()> {
-        let url = crate::test::socket_io_server();
+        let url = socket_io_server();
 
         // test socket build logic
         let socket_builder = ClientBuilder::new(url);
@@ -208,68 +213,7 @@ mod test {
         test_socketio_socket(socket, "/admin".to_owned()).await
     }
 
-    #[tokio::test]
-    async fn socketio_polling_integration() -> Result<()> {
-        let url = crate::test::socket_io_server();
-        let socket = ClientBuilder::new(url.clone())
-            .transport_type(TransportType::Polling)
-            .connect_manual()
-            .await?;
-        test_socketio_socket(socket, "/".to_owned()).await
-    }
-
-    #[tokio::test]
-    async fn socket_io_websocket_integration() -> Result<()> {
-        let url = crate::test::socket_io_server();
-        let socket = ClientBuilder::new(url.clone())
-            .transport_type(TransportType::Websocket)
-            .connect_manual()
-            .await?;
-        test_socketio_socket(socket, "/".to_owned()).await
-    }
-
-    #[tokio::test]
-    async fn socket_io_websocket_upgrade_integration() -> Result<()> {
-        let url = crate::test::socket_io_server();
-        let socket = ClientBuilder::new(url)
-            .transport_type(TransportType::WebsocketUpgrade)
-            .connect_manual()
-            .await?;
-        test_socketio_socket(socket, "/".to_owned()).await
-    }
-
-    #[tokio::test]
-    async fn socket_io_any_integration() -> Result<()> {
-        let url = crate::test::socket_io_server();
-        let socket = ClientBuilder::new(url)
-            .transport_type(TransportType::Any)
-            .connect_manual()
-            .await?;
-        test_socketio_socket(socket, "/".to_owned()).await
-    }
-
     async fn test_socketio_socket(mut socket: Client, nsp: String) -> Result<()> {
-        // open packet
-        let _: Option<Packet> = Some(socket.next().await.unwrap()?);
-
-        let packet: Option<Packet> = Some(socket.next().await.unwrap()?);
-
-        assert!(packet.is_some());
-
-        let packet = packet.unwrap();
-
-        assert_eq!(
-            packet,
-            Packet::new(
-                PacketType::Event,
-                nsp.clone(),
-                Some("[\"Hello from the message event!\"]".to_owned()),
-                None,
-                0,
-                None,
-            )
-        );
-
         let packet: Option<Packet> = Some(socket.next().await.unwrap()?);
 
         assert!(packet.is_some());
@@ -287,23 +231,6 @@ mod test {
                 None
             )
         );
-        let packet: Option<Packet> = Some(socket.next().await.unwrap()?);
-
-        assert!(packet.is_some());
-
-        let packet = packet.unwrap();
-        assert_eq!(
-            packet,
-            Packet::new(
-                PacketType::BinaryEvent,
-                nsp.clone(),
-                None,
-                None,
-                1,
-                Some(vec![Bytes::from_static(&[4, 5, 6])]),
-            )
-        );
-
         let packet: Option<Packet> = Some(socket.next().await.unwrap()?);
 
         assert!(packet.is_some());
@@ -343,5 +270,82 @@ mod test {
             .is_ok());
 
         Ok(())
+    }
+
+    fn setup_server() {
+        let echo_callback =
+            move |_payload: Payload, socket: ServerClient, _need_ack: Option<AckId>| {
+                async move {
+                    socket.join(vec!["room 1"]).await;
+                    socket.emit_to(vec!["room 1"], "echo", json!("")).await;
+                    socket.leave(vec!["room 1"]).await;
+                }
+                .boxed()
+            };
+
+        let client_ack = move |_payload: Payload, socket: ServerClient, need_ack: Option<AckId>| {
+            async move {
+                if let Some(ack_id) = need_ack {
+                    socket
+                        .ack(ack_id, json!("ack to client"))
+                        .await
+                        .expect("success");
+                }
+            }
+            .boxed()
+        };
+
+        let server_recv_ack =
+            move |_payload: Payload, socket: ServerClient, _need_ack: Option<AckId>| {
+                async move {
+                    socket
+                        .emit("server_recv_ack", json!(""))
+                        .await
+                        .expect("success");
+                }
+                .boxed()
+            };
+
+        let trigger_ack = move |_message: Payload, socket: ServerClient, _| {
+            async move {
+                socket.join(vec!["room 2"]).await;
+                socket
+                    .emit_to_with_ack(
+                        vec!["room 2"],
+                        "server_ask_ack",
+                        json!(true),
+                        Duration::from_millis(400),
+                        server_recv_ack,
+                    )
+                    .await;
+                socket.leave(vec!["room 2"]).await;
+            }
+            .boxed()
+        };
+
+        let connect_cb = move |_payload: Payload, socket: ServerClient, _| {
+            async move {
+                socket
+                    .emit("test", "Hello from the test event!")
+                    .await
+                    .expect("success");
+
+                socket
+                    .emit("test", Payload::Binary(Bytes::from_static(&[1, 2, 3])))
+                    .await
+                    .expect("success");
+            }
+            .boxed()
+        };
+
+        let url = socket_io_server();
+        let server = ServerBuilder::new(url.port().unwrap())
+            .on("/admin", "echo", echo_callback)
+            .on("/admin", "client_ack", client_ack)
+            .on("/admin", "trigger_server_ack", trigger_ack)
+            .on("/admin", Event::Connect, connect_cb)
+            .build();
+
+        tokio::spawn(async move { server.serve().await });
     }
 }
