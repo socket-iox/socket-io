@@ -7,7 +7,6 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    task::{ready, Poll},
     time::Duration,
 };
 
@@ -24,7 +23,7 @@ use bytes::Bytes;
 use engineio_rs::{
     Packet as EnginePacket, PacketType as EnginePacketType, Socket as EngineSocket, StreamGenerator,
 };
-use futures_util::{future::BoxFuture, FutureExt, Stream, StreamExt};
+use futures_util::{future::BoxFuture, Stream, StreamExt};
 use serde_json::{from_str, Value};
 use tokio::{
     sync::{Mutex, RwLock},
@@ -56,7 +55,7 @@ pub(crate) struct RawSocket {
     is_server: bool,
 }
 
-impl<C: Clone> Socket<C> {
+impl<C: Clone + Send + 'static> Socket<C> {
     /// Creates a socket with a certain address to connect to as well as a
     /// namespace. If `None` is passed in as namespace, the default namespace
     /// `"/"` is taken.
@@ -100,14 +99,14 @@ impl<C: Clone> Socket<C> {
     ///
     /// # Example
     /// ```no_run
-    /// use socketio_rs::{ClientBuilder, Client, AckId, Payload};
+    /// use socketio_rs::{ClientBuilder, Socket, AckId, Payload};
     /// use serde_json::json;
     /// use futures_util::FutureExt;
     ///
     /// #[tokio::main]
     /// async fn main() {
     ///     let mut socket = ClientBuilder::new("http://localhost:4200/")
-    ///         .on("test", |payload: Payload, socket: Client, need_ack: Option<AckId>| {
+    ///         .on("test", |payload: Payload, socket: Socket, need_ack: Option<AckId>| {
     ///             async move {
     ///                 println!("Received: {:#?}", payload);
     ///                 socket.emit("test", json!({"hello": true})).await.expect("Server unreachable");
@@ -159,7 +158,7 @@ impl<C: Clone> Socket<C> {
     /// packet.
     /// # Example
     /// ```no_run
-    /// use socketio_rs::{ClientBuilder, Client, AckId, Payload};
+    /// use socketio_rs::{ClientBuilder, Socket, AckId, Payload};
     /// use serde_json::json;
     /// use futures_util::{FutureExt, future::BoxFuture};
     ///
@@ -167,7 +166,7 @@ impl<C: Clone> Socket<C> {
     /// async fn main() {
     ///     // apparently the syntax for functions is a bit verbose as rust currently doesn't
     ///     // support an `AsyncFnMut` type that conform with async functions
-    ///     fn handle_test(payload: Payload, socket: Client, need_ack: Option<AckId>) -> BoxFuture<'static, ()> {
+    ///     fn handle_test(payload: Payload, socket: Socket, need_ack: Option<AckId>) -> BoxFuture<'static, ()> {
     ///         async move {
     ///             println!("Received: {:#?}", payload);
     ///             socket.emit("test", json!({"hello": true})).await.expect("Server unreachable");
@@ -222,7 +221,7 @@ impl<C: Clone> Socket<C> {
     /// for [`crate::asynchronous::ClientBuilder::on`].
     /// # Example
     /// ```no_run
-    /// use socketio_rs::{ClientBuilder, Client, Payload};
+    /// use socketio_rs::{ClientBuilder, Socket, Payload};
     /// use serde_json::json;
     /// use std::time::Duration;
     /// use std::thread::sleep;
@@ -236,7 +235,7 @@ impl<C: Clone> Socket<C> {
     ///         .await
     ///         .expect("connection failed");
     ///
-    ///     let ack_callback = |message: Payload, socket: Client, _| {
+    ///     let ack_callback = |message: Payload, socket: Socket, _| {
     ///         async move {
     ///             match message {
     ///                 Payload::String(str) => println!("{}", str),
@@ -293,22 +292,27 @@ impl<C: Clone> Socket<C> {
         self.socket.send(socket_packet).await
     }
 
-    async fn callback<P: Into<Payload>>(
+    async fn callback<P: Into<Payload> + Send>(
         &self,
         event: &Event,
         payload: P,
         need_ack: Option<AckId>,
-    ) -> Result<()> {
-        let mut on = self.on.write().await;
-        let lock = on.deref_mut();
-        trace!("callback on keys {:?}", lock.keys());
-        if let Some(callback) = lock.get_mut(event) {
-            let c = (self.callback_client_fn)((self).clone());
-            trace!("do callback {:?}", event);
-            callback(payload.into(), c, need_ack).await;
-        }
-        drop(on);
-        Ok(())
+    ) {
+        let self_clone = self.clone();
+        let payload = payload.into();
+        let event = event.to_owned();
+        tokio::spawn(async move {
+            let mut on = self_clone.on.write().await;
+            let lock = on.deref_mut();
+            trace!("callback on keys {:?}", lock.keys());
+            if let Some(callback) = lock.get_mut(&event) {
+                let c = (self_clone.callback_client_fn)((self_clone).clone());
+                trace!("do callback {:?}", event);
+                callback(payload, c, need_ack).await;
+                trace!("done callback {:?}", event);
+            }
+            drop(on);
+        });
     }
 
     /// Handles the incoming acks and classifies what callbacks to call and how.
@@ -367,7 +371,7 @@ impl<C: Clone> Socket<C> {
                     Payload::Binary(binary_payload.to_owned()),
                     packet.id,
                 )
-                .await?;
+                .await;
             }
         }
         Ok(())
@@ -409,16 +413,21 @@ impl<C: Clone> Socket<C> {
             };
 
             // call the correct callback
-            self.callback(&event, data.to_string(), packet.id).await?;
+            self.callback(&event, data.to_string(), packet.id).await;
         }
 
         Ok(())
     }
 
-    pub(crate) async fn handle_connect(&self) -> Result<()> {
+    pub(crate) async fn handle_connect(&self, packet: Option<&Packet>) -> Result<()> {
         self.is_connected.store(true, Ordering::Release);
-        trace!("callback connect");
-        self.callback(&Event::Connect, "", None).await?;
+        trace!("callback connect {:?}", packet);
+        let data = match packet {
+            Some(p) => p.data.clone().unwrap_or_else(|| "".to_owned()),
+            None => "".to_owned(),
+        };
+
+        self.callback(&Event::Connect, data, None).await;
         Ok(())
     }
 
@@ -431,19 +440,19 @@ impl<C: Clone> Socket<C> {
             match packet.ptype {
                 PacketType::Ack | PacketType::BinaryAck => {
                     if let Err(err) = self.handle_ack(packet).await {
-                        self.callback(&Event::Error, err.to_string(), None).await?;
+                        self.callback(&Event::Error, err.to_string(), None).await;
                         return Err(err);
                     }
                 }
                 PacketType::BinaryEvent => {
                     if let Err(err) = self.handle_binary_event(packet).await {
-                        self.callback(&Event::Error, err.to_string(), None).await?;
+                        self.callback(&Event::Error, err.to_string(), None).await;
                     }
                 }
-                PacketType::Connect => self.handle_connect().await?,
+                PacketType::Connect => self.handle_connect(Some(packet)).await?,
                 PacketType::Disconnect => {
                     self.is_connected.store(false, Ordering::Release);
-                    self.callback(&Event::Close, "", None).await?;
+                    self.callback(&Event::Close, "", None).await;
                 }
                 PacketType::ConnectError => {
                     self.is_connected.store(false, Ordering::Release);
@@ -456,47 +465,37 @@ impl<C: Clone> Socket<C> {
                                 .unwrap_or(&String::from("\"No error message provided\"")),
                         None,
                     )
-                    .await?;
+                    .await;
                 }
                 PacketType::Event => {
                     if let Err(err) = self.handle_event(packet).await {
-                        self.callback(&Event::Error, err.to_string(), None).await?;
+                        self.callback(&Event::Error, err.to_string(), None).await;
                     }
                 }
             }
         }
         Ok(())
     }
-}
 
-impl<C: Clone> Stream for Socket<C> {
-    type Item = Result<Packet>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
+    pub(crate) async fn poll_packet(&self) -> Option<Result<Packet>> {
         loop {
             // poll for the next payload
-            let next = ready!(self.socket.poll_next_unpin(cx));
+            let next = self.socket.poll_packet().await;
             match next {
                 None => {
                     // end the stream if the underlying one is closed
-                    return Poll::Ready(None);
+                    return None;
                 }
                 Some(Err(err)) => {
                     // call the error callback
-                    ready!(
-                        Box::pin(self.callback(&Event::Error, err.to_string(), None))
-                            .poll_unpin(cx)
-                    )?;
-                    return Poll::Ready(Some(Err(err)));
+                    self.callback(&Event::Error, err.to_string(), None).await;
+                    return Some(Err(err));
                 }
                 Some(Ok(packet)) => {
                     // if this packet is not meant for the current namespace, skip it an poll for the next one
                     if packet.nsp == self.nsp {
-                        ready!(Box::pin(self.handle_socketio_packet(&packet)).poll_unpin(cx))?;
-                        return Poll::Ready(Some(Ok(packet)));
+                        let _ = self.handle_socketio_packet(&packet).await;
+                        return Some(Ok(packet));
                     }
                 }
             }
@@ -642,6 +641,11 @@ impl RawSocket {
         }
     }
 
+    pub(crate) async fn poll_packet(&self) -> Option<Result<Packet>> {
+        let mut generator = self.generator.lock().await;
+        generator.next().await
+    }
+
     fn stream(client: EngineSocket) -> Pin<Box<impl Stream<Item = Result<Packet>> + Send>> {
         Box::pin(try_stream! {
             for await received_data in client.clone() {
@@ -689,18 +693,6 @@ impl RawSocket {
 
     fn is_engineio_connected(&self) -> bool {
         self.engine_client.is_connected()
-    }
-}
-
-impl Stream for RawSocket {
-    type Item = Result<Packet>;
-
-    fn poll_next(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        let mut lock = ready!(Box::pin(self.generator.lock()).poll_unpin(cx));
-        lock.poll_next_unpin(cx)
     }
 }
 

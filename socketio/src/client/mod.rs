@@ -3,4 +3,4 @@ pub(crate) mod builder;
 pub(crate) mod client;
 
 pub use builder::{ClientBuilder, TransportType};
-pub use client::Client;
+pub use client::{Client, Socket};

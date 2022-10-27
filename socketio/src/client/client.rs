@@ -1,45 +1,260 @@
 use std::{
-    collections::HashMap,
     ops::{Deref, DerefMut},
     sync::Arc,
+    time::Duration,
 };
 
 use crate::{
-    callback::Callback,
-    socket::{RawSocket, Socket},
-    Event,
+    socket::Socket as InnerSocket, AckId, ClientBuilder, Error, Event, Packet, Payload, Result,
 };
 
+use backoff::{backoff::Backoff, ExponentialBackoff, ExponentialBackoffBuilder};
+use futures_util::future::BoxFuture;
 use tokio::sync::RwLock;
+use tracing::{trace, warn};
 
 #[derive(Clone)]
 pub struct Client {
-    inner: Socket<Self>,
+    builder: ClientBuilder,
+    socket: Arc<RwLock<InnerSocket<Socket>>>,
+    backoff: ExponentialBackoff,
+    connected: Arc<RwLock<bool>>,
 }
 
-impl Deref for Client {
-    type Target = Socket<Self>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
+#[derive(Clone)]
+pub struct Socket {
+    pub(crate) socket: InnerSocket<Self>,
 }
 
-impl DerefMut for Client {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
+impl From<InnerSocket<Socket>> for Socket {
+    fn from(socket: InnerSocket<Socket>) -> Self {
+        Self { socket }
     }
 }
 
 impl Client {
-    pub(crate) fn new<T: Into<String>>(
-        socket: RawSocket,
-        namespace: T,
-        on: Arc<RwLock<HashMap<Event, Callback<Self>>>>,
-    ) -> Self {
-        Self {
-            inner: Socket::new(socket, namespace, on, Arc::new(|inner| Client { inner })),
+    /// Sends a message to the server using the underlying `engine.io` protocol.
+    /// This message takes an event, which could either be one of the common
+    /// events like "message" or "error" or a custom event like "foo". But be
+    /// careful, the data string needs to be valid JSON. It's recommended to use
+    /// a library like `serde_json` to serialize the data properly.
+    ///
+    /// # Example
+    /// ```no_run
+    /// use socketio_rs::{ClientBuilder, Socket, AckId, Payload};
+    /// use serde_json::json;
+    /// use futures_util::FutureExt;
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let mut socket = ClientBuilder::new("http://localhost:4200/")
+    ///         .on("test", |payload: Payload, socket: Socket, need_ack: Option<AckId>| {
+    ///             async move {
+    ///                 println!("Received: {:#?}", payload);
+    ///                 socket.emit("test", json!({"hello": true})).await.expect("Server unreachable");
+    ///             }.boxed()
+    ///         })
+    ///         .connect()
+    ///         .await
+    ///         .expect("connection failed");
+    ///
+    ///     let json_payload = json!({"token": 123});
+    ///
+    ///     let result = socket.emit("foo", json_payload).await;
+    ///
+    ///     assert!(result.is_ok());
+    /// }
+    /// ```
+    #[inline]
+    pub async fn emit<E, D>(&self, event: E, data: D) -> Result<()>
+    where
+        E: Into<Event>,
+        D: Into<Payload>,
+    {
+        let socket = self.socket.read().await;
+        socket.emit(event, data).await
+    }
+
+    /// Sends a message to the server but `alloc`s an `ack` to check whether the
+    /// server responded in a given time span. This message takes an event, which
+    /// could either be one of the common events like "message" or "error" or a
+    /// custom event like "foo", as well as a data parameter. But be careful,
+    /// in case you send a [`Payload::String`], the string needs to be valid JSON.
+    /// It's even recommended to use a library like serde_json to serialize the data properly.
+    /// It also requires a timeout `Duration` in which the client needs to answer.
+    /// If the ack is acked in the correct time span, the specified callback is
+    /// called. The callback consumes a [`Payload`] which represents the data send
+    /// by the server.
+    ///
+    /// Please note that the requirements on the provided callbacks are similar to the ones
+    /// for [`crate::asynchronous::ClientBuilder::on`].
+    /// # Example
+    /// ```no_run
+    /// use socketio_rs::{ClientBuilder, Socket, Payload};
+    /// use serde_json::json;
+    /// use std::time::Duration;
+    /// use std::thread::sleep;
+    /// use futures_util::FutureExt;
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let mut socket = ClientBuilder::new("http://localhost:4200/")
+    ///         .on("foo", |payload: Payload, _, _| async move { println!("Received: {:#?}", payload) }.boxed())
+    ///         .connect()
+    ///         .await
+    ///         .expect("connection failed");
+    ///
+    ///     let ack_callback = |message: Payload, socket: Socket, _| {
+    ///         async move {
+    ///             match message {
+    ///                 Payload::String(str) => println!("{}", str),
+    ///                 Payload::Binary(bytes) => println!("Received bytes: {:#?}", bytes),
+    ///             }
+    ///         }.boxed()
+    ///     };    
+    ///
+    ///
+    ///     let payload = json!({"token": 123});
+    ///     socket.emit_with_ack("foo", payload, Duration::from_secs(2), ack_callback).await.unwrap();
+    ///
+    ///     sleep(Duration::from_secs(2));
+    /// }
+    /// ```
+    #[inline]
+    pub async fn emit_with_ack<F, E, D>(
+        &self,
+        event: E,
+        data: D,
+        timeout: Duration,
+        callback: F,
+    ) -> Result<()>
+    where
+        F: for<'a> std::ops::FnMut(Payload, Socket, Option<AckId>) -> BoxFuture<'static, ()>
+            + 'static
+            + Send
+            + Sync,
+        E: Into<Event>,
+        D: Into<Payload>,
+    {
+        let socket = self.socket.read().await;
+        socket.emit_with_ack(event, data, timeout, callback).await
+    }
+
+    pub async fn ack(&self, id: usize, data: Payload) -> Result<()> {
+        let socket = self.socket.read().await;
+        socket.ack(id, data).await
+    }
+
+    /// Disconnects from the server by sending a socket.io `Disconnect` packet. This results
+    /// in the underlying engine.io transport to get closed as well.
+    pub async fn disconnect(&self) -> Result<()> {
+        trace!("client disconnect");
+        let mut connected = self.connected.write().await;
+        if !*connected {
+            return Ok(());
         }
+        *connected = false;
+        self.disconnect_socket().await
+    }
+
+    async fn disconnect_socket(&self) -> Result<()> {
+        let socket = self.socket.read().await;
+        socket.disconnect().await
+    }
+
+    pub(crate) async fn new(builder: ClientBuilder) -> Result<Self> {
+        let b = builder.clone();
+        let socket = b.connect_socket().await?;
+        let connected = Arc::new(RwLock::new(true));
+        let backoff = ExponentialBackoffBuilder::new()
+            .with_initial_interval(Duration::from_millis(builder.reconnect_delay_min))
+            .with_max_interval(Duration::from_millis(builder.reconnect_delay_max))
+            .build();
+
+        let s = Self {
+            builder,
+            socket: Arc::new(RwLock::new(socket)),
+            backoff,
+            connected,
+        };
+
+        Ok(s)
+    }
+
+    async fn reconnect(&mut self) {
+        let mut reconnect_attempts = 0;
+        if self.builder.reconnect {
+            loop {
+                if let Some(max_reconnect_attempts) = self.builder.max_reconnect_attempts {
+                    if reconnect_attempts > max_reconnect_attempts {
+                        break;
+                    }
+                }
+                reconnect_attempts += 1;
+
+                if let Some(backoff) = self.backoff.next_backoff() {
+                    trace!("reconnect backoff {:?}", backoff);
+                    tokio::time::sleep(backoff).await;
+                }
+
+                trace!("client reconnect {}", reconnect_attempts);
+                if self.do_reconnect().await.is_ok() {
+                    break;
+                }
+            }
+        }
+    }
+
+    async fn do_reconnect(&self) -> Result<()> {
+        let new_socket = self.builder.clone().connect_socket().await?;
+        let mut socket = self.socket.write().await;
+        *socket = new_socket;
+        Ok(())
+    }
+
+    pub(crate) fn poll_callback(&self) {
+        let mut self_clone = self.clone();
+        // Use thread to consume items in iterator in order to call callbacks
+        tokio::spawn(async move {
+            trace!("start poll_callback ");
+            // tries to restart a poll cycle whenever a 'normal' error occurs,
+            // it just panics on network errors, in case the poll cycle returned
+            // `Result::Ok`, the server receives a close frame so it's safe to
+            // terminate
+            #[allow(clippy::for_loops_over_fallibles)]
+            loop {
+                let packet = self_clone.poll_packet().await;
+                trace!("poll_callback packet {:?}", packet);
+                if let Some(Err(Error::IncompleteResponseFromEngineIo(_))) = packet {
+                    //TODO: logging error
+                    let _ = self_clone.disconnect_socket().await;
+                    self_clone.reconnect().await;
+                }
+                if !*self_clone.connected.read().await {
+                    break;
+                }
+            }
+            warn!("poll_callback exist");
+        });
+    }
+
+    pub(crate) async fn poll_packet(&self) -> Option<Result<Packet>> {
+        let socket = self.socket.read().await;
+        socket.poll_packet().await
+    }
+}
+
+impl Deref for Socket {
+    type Target = InnerSocket<Self>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.socket
+    }
+}
+
+impl DerefMut for Socket {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.socket
     }
 }
 
@@ -47,20 +262,22 @@ impl Client {
 mod test {
     use std::time::Duration;
 
+    use super::*;
     use crate::{
         test::socket_io_server, AckId, Client, ClientBuilder, Event, Packet, PacketType, Payload,
-        Result, ServerBuilder, ServerClient,
+        Result, ServerBuilder, ServerSocket,
     };
 
     use bytes::Bytes;
-    use futures_util::{FutureExt, StreamExt};
+    use futures_util::FutureExt;
     use serde_json::json;
     use tokio::time::sleep;
+    use tracing::info;
 
     #[tokio::test]
     async fn test_client() -> Result<()> {
         // tracing_subscriber::fmt()
-        //     .with_env_filter("engineio=trace,socketio=trace,integration=trace")
+        //     .with_env_filter("engineio=trace,socketio=trace")
         //     .init();
         setup_server();
 
@@ -77,8 +294,8 @@ mod test {
             .on("test", |msg, _, _| {
                 async {
                     match msg {
-                        Payload::String(str) => println!("Received string: {}", str),
-                        Payload::Binary(bin) => println!("Received binary data: {:#?}", bin),
+                        Payload::String(str) => info!("Received string: {}", str),
+                        Payload::Binary(bin) => info!("Received binary data: {:#?}", bin),
                     }
                 }
                 .boxed()
@@ -98,7 +315,7 @@ mod test {
                 "test",
                 Payload::String(payload.to_string()),
                 Duration::from_secs(1),
-                |message: Payload, socket: Client, _| {
+                |message: Payload, socket: Socket, _| {
                     async move {
                         let result = socket
                             .emit(
@@ -108,10 +325,10 @@ mod test {
                             .await;
                         assert!(result.is_ok());
 
-                        println!("Yehaa! My ack got acked?");
+                        info!("Yehaa! My ack got acked?");
                         if let Payload::String(str) = message {
-                            println!("Received string Ack");
-                            println!("Ack data: {}", str);
+                            info!("Received string Ack");
+                            info!("Ack data: {}", str);
                         }
                     }
                     .boxed()
@@ -137,10 +354,10 @@ mod test {
             .namespace("/admin")
             .opening_header("accept-encoding", "application/json")
             .on("test", |str, _, _| {
-                async move { println!("Received: {:#?}", str) }.boxed()
+                async move { info!("Received: {:#?}", str) }.boxed()
             })
             .on("message", |payload, _, _| {
-                async move { println!("{:#?}", payload) }.boxed()
+                async move { info!("{:#?}", payload) }.boxed()
             })
             .connect()
             .await?;
@@ -158,8 +375,8 @@ mod test {
                 json!("pls ack"),
                 Duration::from_secs(1),
                 |payload, _, _| async move {
-                    println!("Yehaa the ack got acked");
-                    println!("With data: {:#?}", payload);
+                    info!("Yehaa the ack got acked");
+                    info!("With data: {:#?}", payload);
                 }
                 .boxed()
             )
@@ -181,12 +398,12 @@ mod test {
             .namespace("/admin")
             .opening_header("accept-encoding", "application/json")
             .on("test", |str, _, _| {
-                async move { println!("Received: {:#?}", str) }.boxed()
+                async move { info!("Received: {:#?}", str) }.boxed()
             })
             .on("message", |payload, _, _| {
-                async move { println!("{:#?}", payload) }.boxed()
+                async move { info!("Received binary {:#?}", payload) }.boxed()
             })
-            .connect_manual()
+            .connect_client()
             .await?;
 
         assert!(socket.emit("message", json!("Hello World")).await.is_ok());
@@ -202,8 +419,8 @@ mod test {
                 json!("pls ack"),
                 Duration::from_secs(1),
                 |payload, _, _| async move {
-                    println!("Yehaa the ack got acked");
-                    println!("With data: {:#?}", payload);
+                    info!("Yehaa the ack got acked");
+                    info!("With data: {:#?}", payload);
                 }
                 .boxed()
             )
@@ -213,9 +430,11 @@ mod test {
         test_socketio_socket(socket, "/admin".to_owned()).await
     }
 
-    async fn test_socketio_socket(mut socket: Client, nsp: String) -> Result<()> {
-        let packet: Option<Packet> = Some(socket.next().await.unwrap()?);
+    async fn test_socketio_socket(socket: Client, nsp: String) -> Result<()> {
+        // ignore connect packet
+        let _: Option<Packet> = Some(socket.poll_packet().await.unwrap()?);
 
+        let packet: Option<Packet> = Some(socket.poll_packet().await.unwrap()?);
         assert!(packet.is_some());
 
         let packet = packet.unwrap();
@@ -231,7 +450,7 @@ mod test {
                 None
             )
         );
-        let packet: Option<Packet> = Some(socket.next().await.unwrap()?);
+        let packet: Option<Packet> = Some(socket.poll_packet().await.unwrap()?);
 
         assert!(packet.is_some());
 
@@ -250,10 +469,10 @@ mod test {
 
         let cb = |message: Payload, _, _| {
             async {
-                println!("Yehaa! My ack got acked?");
+                info!("Yehaa! My ack got acked?");
                 if let Payload::String(str) = message {
-                    println!("Received string ack");
-                    println!("Ack data: {}", str);
+                    info!("Received string ack");
+                    info!("Ack data: {}", str);
                 }
             }
             .boxed()
@@ -274,7 +493,7 @@ mod test {
 
     fn setup_server() {
         let echo_callback =
-            move |_payload: Payload, socket: ServerClient, _need_ack: Option<AckId>| {
+            move |_payload: Payload, socket: ServerSocket, _need_ack: Option<AckId>| {
                 async move {
                     socket.join(vec!["room 1"]).await;
                     socket.emit_to(vec!["room 1"], "echo", json!("")).await;
@@ -283,7 +502,7 @@ mod test {
                 .boxed()
             };
 
-        let client_ack = move |_payload: Payload, socket: ServerClient, need_ack: Option<AckId>| {
+        let client_ack = move |_payload: Payload, socket: ServerSocket, need_ack: Option<AckId>| {
             async move {
                 if let Some(ack_id) = need_ack {
                     socket
@@ -296,7 +515,7 @@ mod test {
         };
 
         let server_recv_ack =
-            move |_payload: Payload, socket: ServerClient, _need_ack: Option<AckId>| {
+            move |_payload: Payload, socket: ServerSocket, _need_ack: Option<AckId>| {
                 async move {
                     socket
                         .emit("server_recv_ack", json!(""))
@@ -306,7 +525,7 @@ mod test {
                 .boxed()
             };
 
-        let trigger_ack = move |_message: Payload, socket: ServerClient, _| {
+        let trigger_ack = move |_message: Payload, socket: ServerSocket, _| {
             async move {
                 socket.join(vec!["room 2"]).await;
                 socket
@@ -323,7 +542,7 @@ mod test {
             .boxed()
         };
 
-        let connect_cb = move |_payload: Payload, socket: ServerClient, _| {
+        let connect_cb = move |_payload: Payload, socket: ServerSocket, _| {
             async move {
                 socket
                     .emit("test", "Hello from the test event!")

@@ -1,15 +1,15 @@
-use crate::ack::AckId;
-use engineio_rs::{HeaderMap, HeaderValue, SocketBuilder as EngineSocketBuilder};
-use futures_util::{future::BoxFuture, StreamExt};
 use std::{collections::HashMap, sync::Arc};
+
+use super::client::{Client, Socket as ClientSocket};
+use crate::socket::RawSocket;
+use crate::{ack::AckId, socket::Socket};
+use crate::{callback::Callback, error::Result, Event, Payload};
+
+use engineio_rs::{HeaderMap, HeaderValue, SocketBuilder as EngineSocketBuilder};
+use futures_util::future::BoxFuture;
 use tokio::sync::RwLock;
 use tracing::trace;
 use url::Url;
-
-use crate::{callback::Callback, error::Result, Error, Event, Payload};
-
-use super::client::Client;
-use crate::socket::RawSocket as InnerSocket;
 
 /// Flavor of Engine.IO transport.
 #[derive(Clone, Eq, PartialEq)]
@@ -28,12 +28,18 @@ pub enum TransportType {
 /// configuring the callback, the namespace and metadata of the socket. If no
 /// namespace is specified, the default namespace `/` is taken. The `connect` method
 /// acts the `build` method and returns a connected [`Client`].
+#[derive(Clone)]
 pub struct ClientBuilder {
     address: String,
-    on: HashMap<Event, Callback<Client>>,
+    on: Arc<RwLock<HashMap<Event, Callback<ClientSocket>>>>,
     namespace: String,
     opening_headers: Option<HeaderMap>,
     transport_type: TransportType,
+    pub(crate) reconnect: bool,
+    // None reconnect attempts represent infinity.
+    pub(crate) max_reconnect_attempts: Option<usize>,
+    pub(crate) reconnect_delay_min: u64,
+    pub(crate) reconnect_delay_max: u64,
 }
 
 impl ClientBuilder {
@@ -43,14 +49,14 @@ impl ClientBuilder {
     /// will be used.
     /// # Example
     /// ```no_run
-    /// use socketio_rs::{Payload, ClientBuilder, Client, AckId};
+    /// use socketio_rs::{Payload, ClientBuilder, Socket, AckId};
     /// use serde_json::json;
     /// use futures_util::future::FutureExt;
     ///
     ///
     /// #[tokio::main]
     /// async fn main() {
-    ///     let callback = |payload: Payload, socket: Client, need_ack: Option<AckId>| {
+    ///     let callback = |payload: Payload, socket: Socket, need_ack: Option<AckId>| {
     ///         async move {
     ///             match payload {
     ///                 Payload::String(str) => println!("Received: {}", str),
@@ -77,10 +83,15 @@ impl ClientBuilder {
     pub fn new<T: Into<String>>(address: T) -> Self {
         Self {
             address: address.into(),
-            on: HashMap::new(),
+            on: Default::default(),
             namespace: "/".to_owned(),
             opening_headers: None,
             transport_type: TransportType::Any,
+            reconnect: true,
+            // None means infinity
+            max_reconnect_attempts: None,
+            reconnect_delay_min: 1000,
+            reconnect_delay_max: 5000,
         }
     }
 
@@ -163,14 +174,20 @@ impl ClientBuilder {
     /// }
     /// ```
     ///
-    pub fn on<T: Into<Event>, F>(mut self, event: T, callback: F) -> Self
+    pub fn on<T: Into<Event>, F>(self, event: T, callback: F) -> Self
     where
-        F: for<'a> std::ops::FnMut(Payload, Client, Option<AckId>) -> BoxFuture<'static, ()>
+        F: for<'a> std::ops::FnMut(Payload, ClientSocket, Option<AckId>) -> BoxFuture<'static, ()>
             + 'static
             + Send
             + Sync,
     {
-        self.on.insert(event.into(), Callback::new(callback));
+        let callback = Callback::new(callback);
+        let event = event.into();
+        // SAFETY: Lock is held for such amount of time no code paths lead to a panic while lock is held
+        let on = self.on.clone();
+        tokio::spawn(async move {
+            on.write().await.insert(event, callback);
+        });
         self
     }
 
@@ -256,28 +273,38 @@ impl ClientBuilder {
     /// }
     /// ```
     pub async fn connect(self) -> Result<Client> {
-        let socket = self.connect_manual().await?;
-        let mut socket_clone = socket.clone();
-
-        // Use thread to consume items in iterator in order to call callbacks
-        tokio::runtime::Handle::current().spawn(async move {
-            loop {
-                // tries to restart a poll cycle whenever a 'normal' error occurs,
-                // it just logs on network errors, in case the poll cycle returned
-                // `Result::Ok`, the server receives a close frame so it's safe to
-                // terminate
-                if let Some(e @ Err(Error::IncompleteResponseFromEngineIo(_))) =
-                    socket_clone.next().await
-                {
-                    trace!("Network error occured: {}", e.unwrap_err());
-                }
-            }
-        });
-
-        Ok(socket)
+        let client = Client::new(self).await;
+        tracing::warn!("here");
+        if let Ok(c) = &client {
+            tracing::warn!("here1");
+            c.poll_callback();
+        }
+        client
     }
 
-    pub async fn connect_manual(self) -> Result<Client> {
+    pub fn reconnect(mut self, reconnect: bool) -> Self {
+        self.reconnect = reconnect;
+        self
+    }
+
+    pub fn reconnect_delay(mut self, min: u64, max: u64) -> Self {
+        self.reconnect_delay_min = min;
+        self.reconnect_delay_max = max;
+
+        self
+    }
+
+    pub fn max_reconnect_attempts(mut self, reconnect_attempts: usize) -> Self {
+        self.max_reconnect_attempts = Some(reconnect_attempts);
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn connect_client(self) -> Result<Client> {
+        Client::new(self.clone()).await
+    }
+
+    pub(crate) async fn connect_socket(&self) -> Result<Socket<ClientSocket>> {
         // Parse url here rather than in new to keep new returning Self.
         let mut url = Url::parse(&self.address)?;
 
@@ -287,8 +314,8 @@ impl ClientBuilder {
 
         let mut builder = EngineSocketBuilder::new(url);
 
-        if let Some(headers) = self.opening_headers {
-            builder = builder.headers(headers);
+        if let Some(headers) = &self.opening_headers {
+            builder = builder.headers(headers.clone());
         }
 
         let engine_client = match self.transport_type {
@@ -298,15 +325,15 @@ impl ClientBuilder {
             TransportType::WebsocketUpgrade => builder.build_websocket_with_upgrade().await?,
         };
 
-        let inner_socket = InnerSocket::client_end(engine_client);
-
-        let socket = Client::new(
+        let inner_socket = RawSocket::client_end(engine_client);
+        let socket = Socket::<ClientSocket>::new(
             inner_socket,
-            &self.namespace,
-            Arc::new(RwLock::new(self.on)),
+            self.namespace.clone(),
+            self.on.clone(),
+            Arc::new(|s| s.into()),
         );
-        socket.connect().await?;
 
+        socket.connect().await?;
         Ok(socket)
     }
 }

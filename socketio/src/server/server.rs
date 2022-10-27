@@ -1,9 +1,9 @@
 use crate::{
-    ack::AckId, callback::Callback, packet::PacketType, server::Client as ServerClient,
+    ack::AckId, callback::Callback, packet::PacketType, server::Client as ServerSocket,
     socket::RawSocket, Error, Event, NameSpace, Payload,
 };
 use engineio_rs::{Event as EngineEvent, Server as EngineServer, Sid as EngineSid};
-use futures_util::{future::BoxFuture, StreamExt};
+use futures_util::future::BoxFuture;
 use serde_json::json;
 use std::{
     collections::{HashMap, HashSet},
@@ -19,12 +19,12 @@ use tracing::{error, trace};
 type Sid = Arc<String>;
 type Room = String;
 type Rooms = HashMap<NameSpace, HashMap<Room, HashSet<Sid>>>;
-type On = HashMap<Event, Callback<ServerClient>>;
+type On = HashMap<Event, Callback<ServerSocket>>;
 
 pub struct Server {
     pub(crate) on: HashMap<NameSpace, Arc<RwLock<On>>>,
     pub(crate) rooms: RwLock<Rooms>,
-    pub(crate) clients: RwLock<HashMap<Sid, HashMap<NameSpace, ServerClient>>>,
+    pub(crate) clients: RwLock<HashMap<Sid, HashMap<NameSpace, ServerSocket>>>,
     pub(crate) engine_server: EngineServer,
     pub(crate) sid_generator: SidGenerator,
 }
@@ -53,6 +53,7 @@ impl Server {
 
                 tokio::spawn(async move {
                     let r = client.emit(event, payload).await;
+                    trace!("server emit_to: {}, status: {:?}", sid, r);
                     if r.is_err() {
                         error!("emit_to {} failed {:?}", sid, r);
                     }
@@ -70,7 +71,7 @@ impl Server {
         timeout: Duration,
         callback: F,
     ) where
-        F: for<'a> std::ops::FnMut(Payload, ServerClient, Option<AckId>) -> BoxFuture<'static, ()>
+        F: for<'a> std::ops::FnMut(Payload, ServerSocket, Option<AckId>) -> BoxFuture<'static, ()>
             + 'static
             + Send
             + Sync
@@ -145,7 +146,7 @@ impl Server {
         });
     }
 
-    pub(crate) async fn client(&self, sid: &Sid, nsp: &str) -> Option<ServerClient> {
+    pub(crate) async fn client(&self, sid: &Sid, nsp: &str) -> Option<ServerSocket> {
         let clients = self.clients.read().await;
         if let Some(nsp_clients) = clients.get(sid) {
             return nsp_clients.get(nsp).cloned();
@@ -226,9 +227,9 @@ impl Server {
         None
     }
 
-    async fn handle_connect(self: &Arc<Self>, mut socket: RawSocket, esid: &EngineSid) {
+    async fn handle_connect(self: &Arc<Self>, socket: RawSocket, esid: &EngineSid) {
         let sid = self.sid_generator.generate(esid);
-        while let Some(Ok(packet)) = socket.next().await {
+        while let Some(Ok(packet)) = socket.poll_packet().await {
             if packet.ptype == PacketType::Connect {
                 let nsp = packet.nsp.clone();
                 self.insert_clients(socket, nsp, sid, true).await;
@@ -247,7 +248,7 @@ impl Server {
         handshake: bool,
     ) {
         if let Some(on) = self.on.get(&nsp) {
-            let client = ServerClient::new(
+            let client = ServerSocket::new(
                 socket,
                 nsp.clone(),
                 sid.clone(),
@@ -255,9 +256,9 @@ impl Server {
                 self.clone(),
             );
 
-            client.handle_connect().await;
+            client.connect_callback().await;
 
-            poll_client(client.clone());
+            poll(client.clone());
 
             if handshake {
                 let _ = client
@@ -311,14 +312,14 @@ impl SidGenerator {
     }
 }
 
-fn poll_client(mut client: ServerClient) {
+fn poll(socket: ServerSocket) {
     tokio::runtime::Handle::current().spawn(async move {
         loop {
             // tries to restart a poll cycle whenever a 'normal' error occurs,
             // it just logs on network errors, in case the poll cycle returned
             // `Result::Ok`, the server receives a close frame so it's safe to
             // terminate
-            let next = client.next().await;
+            let next = socket.poll_packet().await;
             match next {
                 Some(e @ Err(Error::IncompleteResponseFromEngineIo(_))) => {
                     trace!("Network error occured: {}", e.unwrap_err());
@@ -341,13 +342,14 @@ mod test {
     };
 
     use crate::{
-        client::Client, client::ClientBuilder, server::client::Client as ServerClient,
+        client::ClientBuilder, client::Socket, server::client::Client as ServerClient,
         test::rust_socket_io_server, AckId, Event, Payload, ServerBuilder,
     };
 
     use super::SidGenerator;
     use futures_util::FutureExt;
     use serde_json::json;
+    use tracing::info;
 
     #[test]
     fn test_sid_generator() {
@@ -360,6 +362,9 @@ mod test {
 
     #[tokio::test]
     async fn test_server() {
+        // tracing_subscriber::fmt()
+        //     .with_env_filter("engineio=trace,socketio=trace")
+        //     .init();
         setup();
         test_emit().await;
         test_client_ask_ack().await;
@@ -370,10 +375,12 @@ mod test {
         let is_recv = Arc::new(AtomicBool::default());
         let is_recv_clone = Arc::clone(&is_recv);
 
-        let callback = move |_: Payload, _: Client, _: Option<AckId>| {
+        let callback = move |_: Payload, _: Socket, _: Option<AckId>| {
             let is_recv = is_recv_clone.clone();
             async move {
+                tracing::info!("1");
                 is_recv.store(true, Ordering::SeqCst);
+                tracing::info!("2");
             }
             .boxed()
         };
@@ -404,7 +411,7 @@ mod test {
         let is_client_ack_clone = Arc::clone(&is_client_ack);
 
         let client_ack_callback =
-            move |_payload: Payload, _socket: Client, _need_ack: Option<AckId>| {
+            move |_payload: Payload, _socket: Socket, _need_ack: Option<AckId>| {
                 let is_client_ack = is_client_ack_clone.clone();
                 async move {
                     is_client_ack.store(true, Ordering::SeqCst);
@@ -447,7 +454,7 @@ mod test {
         let is_server_ask_ack_clone = Arc::clone(&is_server_ask_ack);
         let is_server_recv_ack_clone = Arc::clone(&is_server_recv_ack);
 
-        let server_ask_ack = move |_payload: Payload, socket: Client, need_ack: Option<AckId>| {
+        let server_ask_ack = move |_payload: Payload, socket: Socket, need_ack: Option<AckId>| {
             let is_server_ask_ack = is_server_ask_ack_clone.clone();
             async move {
                 assert!(need_ack.is_some());
@@ -460,7 +467,7 @@ mod test {
         };
 
         let server_recv_ack =
-            move |_payload: Payload, _socket: Client, _need_ack: Option<AckId>| {
+            move |_payload: Payload, _socket: Socket, _need_ack: Option<AckId>| {
                 let is_server_recv_ack = is_server_recv_ack_clone.clone();
                 async move {
                     is_server_recv_ack.store(true, Ordering::SeqCst);
@@ -498,9 +505,11 @@ mod test {
         let echo_callback =
             move |_payload: Payload, socket: ServerClient, _need_ack: Option<AckId>| {
                 async move {
+                    info!("server echo callback");
                     socket.join(vec!["room 1"]).await;
                     socket.emit_to(vec!["room 1"], "echo", json!("")).await;
                     socket.leave(vec!["room 1"]).await;
+                    info!("server echo callback done");
                 }
                 .boxed()
             };

@@ -42,6 +42,10 @@ pub enum Error {
     IncompleteResponseFromEngineIo(#[from] engineio_rs::Error),
     #[error("Invalid packet type while reading attachments")]
     InvalidAttachmentPacketType(u8),
+    #[error("Invalid reconnect: {0}")]
+    InvalidReconnect(String),
+    #[error("Underlying Engine.IO connection has closed")]
+    StoppedEngineIoSocket,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
