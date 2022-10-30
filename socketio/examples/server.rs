@@ -4,21 +4,22 @@ use socketio_rs::{AckId, Payload, ServerBuilder, ServerSocket};
 
 #[tokio::main]
 async fn main() {
-    // tracing_subscriber::fmt()
-    //     .with_env_filter("engineio=trace,socketio=trace")
-    //     .init();
-    let callback = |_payload: Payload, socket: ServerSocket, _| {
+    tracing_subscriber::fmt()
+        .with_env_filter("engineio=info,socketio=info")
+        .init();
+    let callback = |_payload: Option<Payload>, socket: ServerSocket, _| {
         async move {
             socket.join(vec!["room 1"]).await;
-            socket.emit_to(vec!["room 1"], "test", "foo").await;
+            socket.emit_to(vec!["room 1"], "test", json!("foo")).await;
         }
         .boxed()
     };
 
-    let ack_callback = |_payload: Payload, socket: ServerSocket, ack: Option<AckId>| {
+    let ack_callback = |payload: Option<Payload>, socket: ServerSocket, ack: Option<AckId>| {
         async move {
             if let Some(id) = ack {
-                let _ = socket.ack(id, json!("ack back")).await;
+                let payload = payload.unwrap_or_else(|| json!("ack back").into());
+                let _ = socket.ack(id, payload).await;
             }
         }
         .boxed()

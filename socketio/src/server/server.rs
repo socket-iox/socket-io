@@ -71,7 +71,11 @@ impl Server {
         timeout: Duration,
         callback: F,
     ) where
-        F: for<'a> std::ops::FnMut(Payload, ServerSocket, Option<AckId>) -> BoxFuture<'static, ()>
+        F: for<'a> std::ops::FnMut(
+                Option<Payload>,
+                ServerSocket,
+                Option<AckId>,
+            ) -> BoxFuture<'static, ()>
             + 'static
             + Send
             + Sync
@@ -261,9 +265,7 @@ impl Server {
             poll(client.clone());
 
             if handshake {
-                let _ = client
-                    .handshake(json!({ "sid": sid.clone() }).to_string())
-                    .await;
+                let _ = client.handshake(json!({ "sid": sid.clone() })).await;
             }
 
             let mut clients = self.clients.write().await;
@@ -375,7 +377,7 @@ mod test {
         let is_recv = Arc::new(AtomicBool::default());
         let is_recv_clone = Arc::clone(&is_recv);
 
-        let callback = move |_: Payload, _: Socket, _: Option<AckId>| {
+        let callback = move |_: Option<Payload>, _: Socket, _: Option<AckId>| {
             let is_recv = is_recv_clone.clone();
             async move {
                 tracing::info!("1");
@@ -411,7 +413,7 @@ mod test {
         let is_client_ack_clone = Arc::clone(&is_client_ack);
 
         let client_ack_callback =
-            move |_payload: Payload, _socket: Socket, _need_ack: Option<AckId>| {
+            move |_payload: Option<Payload>, _socket: Socket, _need_ack: Option<AckId>| {
                 let is_client_ack = is_client_ack_clone.clone();
                 async move {
                     is_client_ack.store(true, Ordering::SeqCst);
@@ -454,20 +456,21 @@ mod test {
         let is_server_ask_ack_clone = Arc::clone(&is_server_ask_ack);
         let is_server_recv_ack_clone = Arc::clone(&is_server_recv_ack);
 
-        let server_ask_ack = move |_payload: Payload, socket: Socket, need_ack: Option<AckId>| {
-            let is_server_ask_ack = is_server_ask_ack_clone.clone();
-            async move {
-                assert!(need_ack.is_some());
-                if let Some(ack_id) = need_ack {
-                    socket.ack(ack_id, json!("")).await.expect("success");
-                    is_server_ask_ack.store(true, Ordering::SeqCst);
+        let server_ask_ack =
+            move |_payload: Option<Payload>, socket: Socket, need_ack: Option<AckId>| {
+                let is_server_ask_ack = is_server_ask_ack_clone.clone();
+                async move {
+                    assert!(need_ack.is_some());
+                    if let Some(ack_id) = need_ack {
+                        socket.ack(ack_id, json!("")).await.expect("success");
+                        is_server_ask_ack.store(true, Ordering::SeqCst);
+                    }
                 }
-            }
-            .boxed()
-        };
+                .boxed()
+            };
 
         let server_recv_ack =
-            move |_payload: Payload, _socket: Socket, _need_ack: Option<AckId>| {
+            move |_payload: Option<Payload>, _socket: Socket, _need_ack: Option<AckId>| {
                 let is_server_recv_ack = is_server_recv_ack_clone.clone();
                 async move {
                     is_server_recv_ack.store(true, Ordering::SeqCst);
@@ -503,7 +506,7 @@ mod test {
 
     fn setup() {
         let echo_callback =
-            move |_payload: Payload, socket: ServerClient, _need_ack: Option<AckId>| {
+            move |_payload: Option<Payload>, socket: ServerClient, _need_ack: Option<AckId>| {
                 async move {
                     info!("server echo callback");
                     socket.join(vec!["room 1"]).await;
@@ -514,20 +517,21 @@ mod test {
                 .boxed()
             };
 
-        let client_ack = move |_payload: Payload, socket: ServerClient, need_ack: Option<AckId>| {
-            async move {
-                if let Some(ack_id) = need_ack {
-                    socket
-                        .ack(ack_id, json!("ack to client"))
-                        .await
-                        .expect("success");
+        let client_ack =
+            move |_payload: Option<Payload>, socket: ServerClient, need_ack: Option<AckId>| {
+                async move {
+                    if let Some(ack_id) = need_ack {
+                        socket
+                            .ack(ack_id, json!("ack to client"))
+                            .await
+                            .expect("success");
+                    }
                 }
-            }
-            .boxed()
-        };
+                .boxed()
+            };
 
         let server_recv_ack =
-            move |_payload: Payload, socket: ServerClient, _need_ack: Option<AckId>| {
+            move |_payload: Option<Payload>, socket: ServerClient, _need_ack: Option<AckId>| {
                 async move {
                     socket
                         .emit("server_recv_ack", json!(""))
@@ -537,7 +541,7 @@ mod test {
                 .boxed()
             };
 
-        let trigger_ack = move |_message: Payload, socket: ServerClient, _| {
+        let trigger_ack = move |_message: Option<Payload>, socket: ServerClient, _| {
             async move {
                 socket.join(vec!["room 2"]).await;
                 socket

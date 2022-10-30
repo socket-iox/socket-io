@@ -48,9 +48,9 @@ impl Client {
     /// #[tokio::main]
     /// async fn main() {
     ///     let mut socket = ClientBuilder::new("http://localhost:4200/")
-    ///         .on("test", |payload: Payload, socket: Socket, need_ack: Option<AckId>| {
+    ///         .on("test", |payload: Option<Payload>, socket: Socket, need_ack: Option<AckId>| {
     ///             async move {
-    ///                 println!("Received: {:#?}", payload);
+    ///                 println!("Received: {:?}", payload);
     ///                 socket.emit("test", json!({"hello": true})).await.expect("Server unreachable");
     ///             }.boxed()
     ///         })
@@ -78,9 +78,7 @@ impl Client {
     /// Sends a message to the server but `alloc`s an `ack` to check whether the
     /// server responded in a given time span. This message takes an event, which
     /// could either be one of the common events like "message" or "error" or a
-    /// custom event like "foo", as well as a data parameter. But be careful,
-    /// in case you send a [`Payload::String`], the string needs to be valid JSON.
-    /// It's even recommended to use a library like serde_json to serialize the data properly.
+    /// custom event like "foo", as well as a data parameter.
     /// It also requires a timeout `Duration` in which the client needs to answer.
     /// If the ack is acked in the correct time span, the specified callback is
     /// called. The callback consumes a [`Payload`] which represents the data send
@@ -99,16 +97,18 @@ impl Client {
     /// #[tokio::main]
     /// async fn main() {
     ///     let mut socket = ClientBuilder::new("http://localhost:4200/")
-    ///         .on("foo", |payload: Payload, _, _| async move { println!("Received: {:#?}", payload) }.boxed())
+    ///         .on("foo", |payload: Option<Payload>, _, _| async move { println!("Received: {:#?}", payload) }.boxed())
     ///         .connect()
     ///         .await
     ///         .expect("connection failed");
     ///
-    ///     let ack_callback = |message: Payload, socket: Socket, _| {
+    ///     let ack_callback = |message: Option<Payload>, socket: Socket, _| {
     ///         async move {
     ///             match message {
-    ///                 Payload::String(str) => println!("{}", str),
-    ///                 Payload::Binary(bytes) => println!("Received bytes: {:#?}", bytes),
+    ///                 Some(Payload::Json(data)) => println!("{:?}", data),
+    ///                 Some(Payload::Binary(bytes)) => println!("Received bytes: {:#?}", bytes),
+    ///                 Some(Payload::Multi(multi)) => println!("Received multi: {:?}", multi),
+    ///                 _ => {}
     ///             }
     ///         }.boxed()
     ///     };    
@@ -129,7 +129,11 @@ impl Client {
         callback: F,
     ) -> Result<()>
     where
-        F: for<'a> std::ops::FnMut(Payload, Socket, Option<AckId>) -> BoxFuture<'static, ()>
+        F: for<'a> std::ops::FnMut(
+                Option<Payload>,
+                Socket,
+                Option<AckId>,
+            ) -> BoxFuture<'static, ()>
             + 'static
             + Send
             + Sync,
@@ -271,10 +275,10 @@ mod test {
     use bytes::Bytes;
     use futures_util::FutureExt;
     use serde_json::json;
-    use tokio::time::sleep;
+    use tokio::{sync::mpsc::unbounded_channel, time::sleep};
     use tracing::info;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
     async fn test_client() -> Result<()> {
         // tracing_subscriber::fmt()
         //     .with_env_filter("engineio=trace,socketio=trace")
@@ -294,8 +298,10 @@ mod test {
             .on("test", |msg, _, _| {
                 async {
                     match msg {
-                        Payload::String(str) => info!("Received string: {}", str),
-                        Payload::Binary(bin) => info!("Received binary data: {:#?}", bin),
+                        Some(Payload::Json(data)) => info!("Received string: {:?}", data),
+                        Some(Payload::Binary(bin)) => info!("Received binary data: {:#?}", bin),
+                        Some(Payload::Multi(multi)) => info!("Received multi {:?}", multi),
+                        _ => {}
                     }
                 }
                 .boxed()
@@ -304,31 +310,26 @@ mod test {
             .await?;
 
         let payload = json!({"token": 123_i32});
-        let result = socket
-            .emit("test", Payload::String(payload.to_string()))
-            .await;
+        let result = socket.emit("test", Payload::Json(payload.clone())).await;
 
         assert!(result.is_ok());
 
         let ack = socket
             .emit_with_ack(
                 "test",
-                Payload::String(payload.to_string()),
+                Payload::Json(payload),
                 Duration::from_secs(1),
-                |message: Payload, socket: Socket, _| {
+                |message: Option<Payload>, socket: Socket, _| {
                     async move {
                         let result = socket
-                            .emit(
-                                "test",
-                                Payload::String(json!({"got ack": true}).to_string()),
-                            )
+                            .emit("test", Payload::Json(json!({"got ack": true})))
                             .await;
                         assert!(result.is_ok());
 
                         info!("Yehaa! My ack got acked?");
-                        if let Payload::String(str) = message {
+                        if let Some(Payload::Json(data)) = message {
                             info!("Received string Ack");
-                            info!("Ack data: {}", str);
+                            info!("Ack data: {:?}", data);
                         }
                     }
                     .boxed()
@@ -406,27 +407,6 @@ mod test {
             .connect_client()
             .await?;
 
-        assert!(socket.emit("message", json!("Hello World")).await.is_ok());
-
-        assert!(socket
-            .emit("binary", Bytes::from_static(&[46, 88]))
-            .await
-            .is_ok());
-
-        assert!(socket
-            .emit_with_ack(
-                "binary",
-                json!("pls ack"),
-                Duration::from_secs(1),
-                |payload, _, _| async move {
-                    info!("Yehaa the ack got acked");
-                    info!("With data: {:#?}", payload);
-                }
-                .boxed()
-            )
-            .await
-            .is_ok());
-
         test_socketio_socket(socket, "/admin".to_owned()).await
     }
 
@@ -438,20 +418,19 @@ mod test {
         assert!(packet.is_some());
 
         let packet = packet.unwrap();
-
         assert_eq!(
             packet,
             Packet::new(
                 PacketType::Event,
                 nsp.clone(),
-                Some("[\"test\",\"Hello from the test event!\"]".to_owned()),
+                Some(json!(["test", "Hello from the test event!"])),
                 None,
                 0,
                 None
             )
         );
-        let packet: Option<Packet> = Some(socket.poll_packet().await.unwrap()?);
 
+        let packet: Option<Packet> = Some(socket.poll_packet().await.unwrap()?);
         assert!(packet.is_some());
 
         let packet = packet.unwrap();
@@ -460,62 +439,121 @@ mod test {
             Packet::new(
                 PacketType::BinaryEvent,
                 nsp.clone(),
-                Some("\"test\"".to_owned()),
+                Some(json!(["test", {"_placeholder": true, "num": 0}])),
                 None,
                 1,
                 Some(vec![Bytes::from_static(&[1, 2, 3])]),
             )
         );
 
-        let cb = |message: Payload, _, _| {
-            async {
-                info!("Yehaa! My ack got acked?");
-                if let Payload::String(str) = message {
-                    info!("Received string ack");
-                    info!("Ack data: {}", str);
-                }
+        let packet: Option<Packet> = Some(socket.poll_packet().await.unwrap()?);
+        assert!(packet.is_some());
+
+        let packet = packet.unwrap();
+        match packet.data {
+            Some(serde_json::Value::Array(array)) => assert_eq!(array.len(), 5),
+            _ => panic!("invlaid emit multi payload"),
+        }
+
+        let socket_clone = socket.clone();
+        // continue poll cycle
+        tokio::spawn(async move {
+            loop {
+                let _ = socket_clone.poll_packet().await;
+            }
+        });
+
+        let (tx, mut rx) = unbounded_channel();
+        let tx = Arc::new(tx);
+
+        let cb = move |message: Option<Payload>, _, _| {
+            let tx = tx.clone();
+            async move {
+                match message {
+                    Some(Payload::Multi(vec)) => {
+                        let _ = tx.send(vec.len() == 2);
+                    }
+                    _ => {
+                        let _ = tx.send(false);
+                    }
+                };
             }
             .boxed()
         };
 
         assert!(socket
             .emit_with_ack(
-                "test",
-                Payload::String("123".to_owned()),
+                "client_ack",
+                Payload::Multi(vec![json!(1).into(), json!(2).into()]),
                 Duration::from_secs(10),
                 cb
             )
             .await
             .is_ok());
 
+        match rx.recv().await {
+            Some(true) => {}
+            _ => panic!("ACK callback invlaid"),
+        };
+
+        let (tx, mut rx) = unbounded_channel();
+        let cb = move |message: Option<Payload>, _, _| {
+            let tx = tx.clone();
+            async move {
+                match message {
+                    Some(Payload::Multi(vec)) => {
+                        let _ = tx.send(vec.len() == 2);
+                    }
+                    _ => {
+                        let _ = tx.send(false);
+                    }
+                };
+            }
+            .boxed()
+        };
+
+        assert!(socket
+            .emit_with_ack(
+                "client_ack",
+                Payload::Multi(vec![Bytes::from_static(b"1").into(), json!(2).into()]),
+                Duration::from_secs(10),
+                cb
+            )
+            .await
+            .is_ok());
+
+        match rx.recv().await {
+            Some(true) => {}
+            _ => panic!("BINARY_ACK callback invlaid"),
+        };
+
         Ok(())
     }
 
     fn setup_server() {
         let echo_callback =
-            move |_payload: Payload, socket: ServerSocket, _need_ack: Option<AckId>| {
+            move |_payload: Option<Payload>, socket: ServerSocket, _need_ack: Option<AckId>| {
                 async move {
-                    socket.join(vec!["room 1"]).await;
-                    socket.emit_to(vec!["room 1"], "echo", json!("")).await;
-                    socket.leave(vec!["room 1"]).await;
+                    let _ = socket.emit("echo", json!("")).await;
                 }
                 .boxed()
             };
 
-        let client_ack = move |_payload: Payload, socket: ServerSocket, need_ack: Option<AckId>| {
-            async move {
-                if let Some(ack_id) = need_ack {
-                    socket
-                        .ack(ack_id, json!("ack to client"))
-                        .await
-                        .expect("success");
+        let client_ack =
+            move |payload: Option<Payload>, socket: ServerSocket, need_ack: Option<AckId>| {
+                async move {
+                    if let Some(ack_id) = need_ack {
+                        socket
+                            .ack(ack_id, payload.unwrap_or_else(|| json!("ackback").into()))
+                            .await
+                            .expect("success");
+                    }
                 }
-            }
-            .boxed()
-        };
+                .boxed()
+            };
 
         let server_recv_ack =
-            move |_payload: Payload, socket: ServerSocket, _need_ack: Option<AckId>| {
+            move |_payload: Option<Payload>, socket: ServerSocket, _need_ack: Option<AckId>| {
                 async move {
                     socket
                         .emit("server_recv_ack", json!(""))
@@ -525,32 +563,44 @@ mod test {
                 .boxed()
             };
 
-        let trigger_ack = move |_message: Payload, socket: ServerSocket, _| {
+        let trigger_ack = move |message: Option<Payload>, socket: ServerSocket, _| {
             async move {
-                socket.join(vec!["room 2"]).await;
+                let payload = message.unwrap_or_else(|| json!({"ack_back": true}).into());
                 socket
-                    .emit_to_with_ack(
-                        vec!["room 2"],
+                    .emit_with_ack(
                         "server_ask_ack",
-                        json!(true),
+                        payload,
                         Duration::from_millis(400),
                         server_recv_ack,
                     )
-                    .await;
-                socket.leave(vec!["room 2"]).await;
+                    .await
+                    .expect("success");
             }
             .boxed()
         };
 
-        let connect_cb = move |_payload: Payload, socket: ServerSocket, _| {
+        let connect_cb = move |_payload: Option<Payload>, socket: ServerSocket, _| {
             async move {
                 socket
-                    .emit("test", "Hello from the test event!")
+                    .emit("test", json!("Hello from the test event!"))
                     .await
                     .expect("success");
 
                 socket
                     .emit("test", Payload::Binary(Bytes::from_static(&[1, 2, 3])))
+                    .await
+                    .expect("success");
+
+                socket
+                    .emit(
+                        "test",
+                        Payload::Multi(vec![
+                            json!(1).into(),
+                            json!("2").into(),
+                            Bytes::from_static(&[3]).into(),
+                            Bytes::from_static(b"4").into(),
+                        ]),
+                    )
                     .await
                     .expect("success");
             }
@@ -561,7 +611,7 @@ mod test {
         let server = ServerBuilder::new(url.port().unwrap())
             .on("/admin", "echo", echo_callback)
             .on("/admin", "client_ack", client_ack)
-            .on("/admin", "trigger_server_ack", trigger_ack)
+            .on("/admin", "server_ack", trigger_ack)
             .on("/admin", Event::Connect, connect_cb)
             .build();
 

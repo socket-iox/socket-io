@@ -95,7 +95,7 @@ impl Client {
         timeout: Duration,
         callback: F,
     ) where
-        F: for<'a> std::ops::FnMut(Payload, Self, Option<AckId>) -> BoxFuture<'static, ()>
+        F: for<'a> std::ops::FnMut(Option<Payload>, Self, Option<AckId>) -> BoxFuture<'static, ()>
             + 'static
             + Send
             + Sync

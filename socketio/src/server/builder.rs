@@ -36,7 +36,11 @@ impl ServerBuilder {
         callback: F,
     ) -> Self
     where
-        F: for<'a> std::ops::FnMut(Payload, Client, Option<AckId>) -> BoxFuture<'static, ()>
+        F: for<'a> std::ops::FnMut(
+                Option<Payload>,
+                Client,
+                Option<AckId>,
+            ) -> BoxFuture<'static, ()>
             + 'static
             + Send
             + Sync,

@@ -27,6 +27,7 @@ futures-util = { version = "0.3", default-features = false, features = [
 ] }
 parking_lot = "0.12"
 serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
 thiserror = "1.0"
 tokio = "1.16.1"
 tokio-util = "0.7.3"

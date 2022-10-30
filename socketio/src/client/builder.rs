@@ -56,11 +56,13 @@ impl ClientBuilder {
     ///
     /// #[tokio::main]
     /// async fn main() {
-    ///     let callback = |payload: Payload, socket: Socket, need_ack: Option<AckId>| {
+    ///     let callback = |payload: Option<Payload>, socket: Socket, need_ack: Option<AckId>| {
     ///         async move {
     ///             match payload {
-    ///                 Payload::String(str) => println!("Received: {}", str),
-    ///                 Payload::Binary(bin_data) => println!("Received bytes: {:#?}", bin_data),
+    ///                 Some(Payload::Json(data)) => println!("Received: {:?}", data),
+    ///                 Some(Payload::Binary(bin)) => println!("Received bytes: {:#?}", bin),
+    ///                 Some(Payload::Multi(multi)) => println!("Received multi: {:?}", multi),
+    ///                 _ => {},
     ///             }
     ///         }.boxed()
     ///     };
@@ -122,11 +124,13 @@ impl ClientBuilder {
     /// async fn main() {
     ///     let socket = ClientBuilder::new("http://localhost:4200/")
     ///         .namespace("/admin")
-    ///         .on("test", |payload: Payload, _, _| {
+    ///         .on("test", |payload: Option<Payload>, _, _| {
     ///             async move {
     ///                 match payload {
-    ///                        Payload::String(str) => println!("Received: {}", str),
-    ///                       Payload::Binary(bin_data) => println!("Received bytes: {:#?}", bin_data),
+    ///                     Some(Payload::Json(data)) => println!("Received: {:?}", data),
+    ///                     Some(Payload::Binary(bin)) => println!("Received bytes: {:#?}", bin),
+    ///                     Some(Payload::Multi(multi)) => println!("Received multi: {:?}", multi),
+    ///                     _ => {},
     ///                 }
     ///             }
     ///             .boxed()
@@ -156,11 +160,13 @@ impl ClientBuilder {
     ///
     /// #[tokio::main]
     /// async fn main() {
-    ///     let callback = |payload: Payload, _, _| {
+    ///     let callback = |payload: Option<Payload>, _, _| {
     ///             async move {
     ///                 match payload {
-    ///                        Payload::String(str) => println!("Received: {}", str),
-    ///                       Payload::Binary(bin_data) => println!("Received bytes: {:#?}", bin_data),
+    ///                     Some(Payload::Json(data)) => println!("Received: {:?}", data),
+    ///                     Some(Payload::Binary(bin)) => println!("Received bytes: {:#?}", bin),
+    ///                     Some(Payload::Multi(multi)) => println!("Received multi: {:?}", multi),
+    ///                     _ => {},
     ///                 }
     ///             }
     ///             .boxed() // <-- this makes sure we end up with a `BoxFuture<_>`
@@ -176,7 +182,11 @@ impl ClientBuilder {
     ///
     pub fn on<T: Into<Event>, F>(self, event: T, callback: F) -> Self
     where
-        F: for<'a> std::ops::FnMut(Payload, ClientSocket, Option<AckId>) -> BoxFuture<'static, ()>
+        F: for<'a> std::ops::FnMut(
+                Option<Payload>,
+                ClientSocket,
+                Option<AckId>,
+            ) -> BoxFuture<'static, ()>
             + 'static
             + Send
             + Sync,
@@ -274,9 +284,7 @@ impl ClientBuilder {
     /// ```
     pub async fn connect(self) -> Result<Client> {
         let client = Client::new(self).await;
-        tracing::warn!("here");
         if let Ok(c) = &client {
-            tracing::warn!("here1");
             c.poll_callback();
         }
         client

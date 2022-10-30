@@ -100,10 +100,7 @@ impl Socket {
         // check for the appropriate action or callback
         self.handle_packet(packet.clone()).await;
         match packet.ptype {
-            PacketType::MessageBinary => {
-                self.handle_data(packet.data).await;
-            }
-            PacketType::Message => {
+            PacketType::MessageBinary | PacketType::Message => {
                 self.handle_data(packet.data).await;
             }
             PacketType::Close => {
@@ -140,6 +137,35 @@ impl Socket {
             .await?;
 
         self.connected.store(false, Ordering::Release);
+
+        Ok(())
+    }
+
+    /// Sends a packet to the server.
+    pub async fn emit_multi(&self, packets: Vec<Packet>) -> Result<()> {
+        if !self.connected.load(Ordering::Acquire) {
+            let error = Error::IllegalActionBeforeOpen();
+            self.on_error(format!("{}", error)).await;
+            return Err(error);
+        }
+
+        trace!("socket emit {:?}", packets);
+        let lock = self.transport.lock().await;
+        for packet in packets {
+            // send a post request with the encoded payload as body
+            // if this is a binary attachment, then send the raw bytes
+            let data = match packet.ptype {
+                PacketType::MessageBinary => Data::Binary(packet.data),
+                _ => Data::Text(packet.into()),
+            };
+
+            let fut = lock.as_transport().emit(data);
+
+            if let Err(error) = fut.await {
+                self.on_error(error.to_string()).await;
+                return Err(error);
+            }
+        }
 
         Ok(())
     }
