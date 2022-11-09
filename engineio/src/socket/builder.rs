@@ -150,31 +150,24 @@ impl SocketBuilder {
             None
         };
 
-        match self.url.scheme() {
-            "http" | "ws" => {
-                let (sender, receiver) =
-                    WebsocketTransport::connect(self.url.clone(), headers).await?;
-                let mut transport = WebsocketTransport::new(sender, receiver);
+        let (sender, receiver) = WebsocketTransport::connect(self.url.clone(), headers).await?;
+        let mut transport = WebsocketTransport::new(sender, receiver);
 
-                if self.handshake.is_some() {
-                    transport.upgrade().await?;
-                } else {
-                    self.handshake_with_transport(&mut transport).await?;
-                }
-
-                // NOTE: Although self.url contains the sid, it does not propagate to the transport
-                // SAFETY: handshake function called previously.
-                Ok(Socket::new(
-                    TransportType::Websocket(transport),
-                    self.handshake.unwrap(),
-                    None,
-                    self.should_pong,
-                    false,
-                ))
-            }
-            // TODO: tls
-            _ => Err(Error::InvalidUrlScheme(self.url.scheme().to_string())),
+        if self.handshake.is_some() {
+            transport.upgrade().await?;
+        } else {
+            self.handshake_with_transport(&mut transport).await?;
         }
+
+        // NOTE: Although self.url contains the sid, it does not propagate to the transport
+        // SAFETY: handshake function called previously.
+        Ok(Socket::new(
+            TransportType::Websocket(transport),
+            self.handshake.unwrap(),
+            None,
+            self.should_pong,
+            false,
+        ))
     }
 
     pub async fn build_polling(mut self) -> Result<Socket> {

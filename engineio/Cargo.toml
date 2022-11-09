@@ -1,6 +1,6 @@
 [package]
 name = "engineio-rs"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "An implementation of a engineio written in rust."
 repository = "https://github.com/socket-iox/socket-io"
@@ -26,15 +26,14 @@ futures-util = { version = "0.3", default-features = false, features = [
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive", "rc"] }
 thiserror = "1.0"
-tokio = "1.16.1"
+tokio = {version = "1.16.1", features = ["full"]}
 tokio-util = "0.7.3"
-tokio-tungstenite = { version = "0.17.2" }
-tungstenite = "0.17.3"
+tokio-tungstenite = { version = "0.17.2", features = ["rustls-tls-native-roots"] }
+tungstenite = { version = "0.17.3", features = ["rustls-tls-native-roots"]}
 tracing = "0.1"
 http = "0.2.8"
 httparse = "1.6.0"
-reqwest = { version = "0.11.12", features = [
-  "blocking",
+reqwest = { version = "0.11.12", default-features = false, features = [
   "rustls-tls",
   "stream",
 ] }
