@@ -37,8 +37,13 @@ impl WebsocketTransport {
         mut url: Url,
         headers: Option<HeaderMap>,
     ) -> Result<(WebsocketSender, WebsocketReceiver)> {
+        tracing::trace!("websocket_transport connect: {:?} with {:?}", url, headers);
         // SAFETY: ws is valid to parse scheme in `set_scheme`
-        url.set_scheme("ws").unwrap();
+        if url.scheme() == "https" {
+            url.set_scheme("wss").unwrap();
+        } else {
+            url.set_scheme("ws").unwrap();
+        }
         url.query_pairs_mut().append_pair("transport", "websocket");
 
         let mut req = url.clone().into_client_request()?;

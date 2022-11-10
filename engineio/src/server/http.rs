@@ -260,6 +260,7 @@ pub(crate) fn parse_request_type(
     let url = format!("http://{}{}", addr, req.path?);
     let url = Url::parse(&url).ok()?;
     let mut sid = None;
+    let mut query_transport = None;
 
     for (query_key, query_value) in url.query_pairs() {
         if query_key.to_uppercase() == "EIO" && query_value != "4" {
@@ -268,10 +269,22 @@ pub(crate) fn parse_request_type(
         if query_key.to_lowercase() == "sid" {
             sid = Some(Arc::new(query_value.to_string()));
         }
+        if query_key.to_lowercase() == "transport" && query_value.to_lowercase() == "websocket" {
+            query_transport = Some("websocket");
+        }
+
+        if query_key.to_lowercase() == "transport" && query_value.to_lowercase() == "polling" {
+            query_transport = Some("polling");
+        }
     }
 
+    let query_transport = query_transport?;
+
     for header in req.headers {
-        if header.name.to_lowercase() == "upgrade" && req.method?.to_uppercase() == "GET" {
+        if header.name.to_lowercase() == "upgrade"
+            && req.method?.to_uppercase() == "GET"
+            && query_transport == "websocket"
+        {
             return Some(RequestType::WsUpgrade(sid));
         }
 

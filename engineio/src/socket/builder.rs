@@ -159,6 +159,8 @@ impl SocketBuilder {
             self.handshake_with_transport(&mut transport).await?;
         }
 
+        trace!("build_websocket success");
+
         // NOTE: Although self.url contains the sid, it does not propagate to the transport
         // SAFETY: handshake function called previously.
         Ok(Socket::new(
