@@ -14,7 +14,10 @@ use std::{
     time::Duration,
 };
 use tokio::sync::RwLock;
-use tracing::{error, trace};
+use tracing::{error, trace, warn};
+
+// TODO: read from config
+const CONNECT_TIMEOUT: u64 = 5;
 
 type Sid = Arc<String>;
 type Room = String;
@@ -138,6 +141,7 @@ impl Server {
             let mut event_rx = event_rx.lock().await;
 
             while let Some(event) = event_rx.recv().await {
+                trace!("server recv_event: {:?}", event);
                 match event {
                     EngineEvent::OnOpen(esid) => server.create_client(esid).await,
                     EngineEvent::OnClose(esid) => server.drop_client(&esid).await,
@@ -204,10 +208,9 @@ impl Server {
             let socket = RawSocket::server_end(engine_socket);
 
             // TODO: support multiple namespace
-
             match self.polling_transport_info(&esid).await {
                 Some((sid, nsp)) => self.insert_clients(socket, nsp, sid, false).await,
-                None => self.handle_connect(socket, &esid).await,
+                None => self.handle_connect(socket, esid).await,
             };
         }
     }
@@ -231,7 +234,24 @@ impl Server {
         None
     }
 
-    async fn handle_connect(self: &Arc<Self>, socket: RawSocket, esid: &EngineSid) {
+    async fn handle_connect(self: &Arc<Self>, socket: RawSocket, esid: EngineSid) {
+        trace!("handle_connect: {:?}", esid);
+        let slf = self.clone();
+        tokio::spawn(async move {
+            if tokio::time::timeout(
+                Duration::from_secs(CONNECT_TIMEOUT),
+                slf.do_handle_connect(socket, &esid),
+            )
+            .await
+            .is_err()
+            {
+                warn!("handle_connect timeout, {:?} dropped", esid);
+                slf.drop_client(&esid).await;
+            }
+        });
+    }
+
+    async fn do_handle_connect(self: &Arc<Self>, socket: RawSocket, esid: &EngineSid) {
         let sid = self.sid_generator.generate(esid);
         while let Some(Ok(packet)) = socket.poll_packet().await {
             if packet.ptype == PacketType::Connect {
