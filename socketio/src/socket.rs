@@ -97,6 +97,7 @@ impl<C: Clone + Send + 'static> Socket<C> {
 
     /// Connects the client to a server. Afterwards the `emit_*` methods can be
     /// called to interact with the server.
+    #[cfg(feature = "client")]
     pub(crate) async fn connect(&self) -> Result<()> {
         // Connect the underlying socket
         self.socket.connect().await?;
@@ -164,6 +165,7 @@ impl<C: Clone + Send + 'static> Socket<C> {
         self.socket.ack(&self.nsp, id, data.into()).await
     }
 
+    #[cfg(feature = "server")]
     #[inline]
     pub(crate) async fn handshake(&self, data: Value) -> Result<()> {
         if !self.is_connected.load(Ordering::Acquire) {
@@ -589,6 +591,7 @@ impl<C: Clone + Send + 'static> Socket<C> {
 
 impl RawSocket {
     /// Creates an instance of `Socket`.
+    #[cfg(feature = "client")]
     pub(super) fn client_end(engine_client: EngineSocket) -> Self {
         RawSocket {
             engine_client: Arc::new(engine_client.clone()),
@@ -599,6 +602,7 @@ impl RawSocket {
         }
     }
 
+    #[cfg(feature = "server")]
     pub(super) fn server_end(engine_client: EngineSocket) -> Self {
         RawSocket {
             engine_client: Arc::new(engine_client.clone()),
@@ -611,6 +615,7 @@ impl RawSocket {
 
     /// Connects to the server. This includes a connection of the underlying
     /// engine.io client and afterwards an opening socket.io request.
+    #[cfg(feature = "client")]
     pub async fn connect(&self) -> Result<()> {
         if !self.is_server {
             self.engine_client.connect().await?;
@@ -678,6 +683,7 @@ impl RawSocket {
         self.send(packet).await
     }
 
+    #[cfg(feature = "server")]
     pub(crate) async fn handshake(&self, nsp: &str, data: Value) -> Result<()> {
         let packet = Packet::new(
             PacketType::Connect,

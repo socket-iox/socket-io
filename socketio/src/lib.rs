@@ -1,22 +1,27 @@
 pub(crate) mod ack;
 pub(crate) mod callback;
+#[cfg(feature = "client")]
 pub(crate) mod client;
 pub(crate) mod error;
 pub(crate) mod event;
 pub(crate) mod packet;
 pub(crate) mod payload;
+#[cfg(feature = "server")]
 pub(crate) mod server;
 
 mod socket;
 
 pub use ack::AckId;
+#[cfg(feature = "client")]
 pub use client::{Client, ClientBuilder, Socket, TransportType};
 pub use error::{Error, Result};
 pub use event::Event;
 pub use packet::{Packet, PacketType};
 pub use payload::Payload;
+#[cfg(feature = "server")]
 pub use server::{Client as ServerSocket, Server, ServerBuilder};
 
+#[cfg(feature = "server")]
 pub(crate) type NameSpace = String;
 
 #[cfg(test)]

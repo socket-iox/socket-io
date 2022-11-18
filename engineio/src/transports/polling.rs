@@ -12,15 +12,15 @@ use bytes::{BufMut, Bytes, BytesMut};
 use futures_util::{ready, FutureExt, Stream, StreamExt};
 use http::HeaderMap;
 use reqwest::{Client, ClientBuilder, Response, Url};
-use tokio::sync::{
-    mpsc::{Receiver, Sender},
-    Mutex,
-};
+#[cfg(feature = "server")]
+use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::Mutex;
 
+#[cfg(feature = "server")]
+use crate::Error;
 use crate::{
     error::Result,
     transports::{Data, Transport},
-    Error,
 };
 
 type ClientPollStream = Box<dyn Stream<Item = Result<Bytes>> + 'static + Send>;
@@ -32,6 +32,7 @@ pub struct ClientPollingTransport {
     stream: Arc<Mutex<Pin<ClientPollStream>>>,
 }
 
+#[cfg(feature = "server")]
 #[derive(Debug, Clone)]
 pub struct ServerPollingTransport {
     sender: Arc<Sender<Bytes>>,
@@ -132,6 +133,7 @@ impl Stream for ClientPollingTransport {
     }
 }
 
+#[cfg(feature = "server")]
 impl ServerPollingTransport {
     pub(crate) fn new(sender: Sender<Bytes>, receiver: Receiver<Bytes>) -> Self {
         Self {
@@ -141,6 +143,7 @@ impl ServerPollingTransport {
     }
 }
 
+#[cfg(feature = "server")]
 #[async_trait]
 impl Transport for ServerPollingTransport {
     async fn emit(&self, payload: Data) -> Result<()> {
@@ -159,6 +162,7 @@ impl Transport for ServerPollingTransport {
     }
 }
 
+#[cfg(feature = "server")]
 impl Stream for ServerPollingTransport {
     type Item = Result<Bytes>;
 

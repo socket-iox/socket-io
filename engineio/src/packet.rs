@@ -1,10 +1,14 @@
 use base64::{decode, encode};
 use bytes::{BufMut, Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
+use std::char;
+#[cfg(feature = "server")]
+use std::collections::VecDeque;
+use std::convert::TryFrom;
 use std::convert::TryInto;
 use std::ops::Index;
-use std::{char, collections::VecDeque};
-use std::{convert::TryFrom, str::from_utf8};
+#[cfg(feature = "server")]
+use std::str::from_utf8;
 
 use crate::{Error, Result, Sid};
 
@@ -233,6 +237,7 @@ impl Index<usize> for Payload {
     }
 }
 
+#[cfg(feature = "server")]
 pub(crate) fn build_polling_payload(mut byte_vec: VecDeque<Bytes>) -> Option<String> {
     let mut payload = String::new();
     while let Some(bytes) = byte_vec.pop_front() {

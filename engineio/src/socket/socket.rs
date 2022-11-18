@@ -89,6 +89,7 @@ impl Socket {
         Ok(())
     }
 
+    #[cfg(feature = "server")]
     pub(crate) async fn last_pong(&self) -> Instant {
         *(self.last_pong.lock().await)
     }

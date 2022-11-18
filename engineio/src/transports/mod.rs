@@ -5,13 +5,10 @@ use bytes::Bytes;
 use futures_util::Stream;
 use tungstenite::Message;
 
-use crate::{
-    error::Result,
-    transports::{
-        polling::{ClientPollingTransport, ServerPollingTransport},
-        websocket::WebsocketTransport,
-    },
-};
+use crate::transports::polling::ClientPollingTransport;
+#[cfg(feature = "server")]
+use crate::transports::polling::ServerPollingTransport;
+use crate::{error::Result, transports::websocket::WebsocketTransport};
 
 pub(crate) mod polling;
 pub(crate) mod websocket;
@@ -41,6 +38,7 @@ impl TryFrom<Data> for Message {
 #[derive(Debug, Clone)]
 pub enum TransportType {
     ClientPolling(ClientPollingTransport),
+    #[cfg(feature = "server")]
     ServerPolling(ServerPollingTransport),
     Websocket(WebsocketTransport),
 }
@@ -51,6 +49,7 @@ impl From<ClientPollingTransport> for TransportType {
     }
 }
 
+#[cfg(feature = "server")]
 impl From<ServerPollingTransport> for TransportType {
     fn from(transport: ServerPollingTransport) -> Self {
         TransportType::ServerPolling(transport)
@@ -67,6 +66,7 @@ impl TransportType {
     pub fn as_transport(&self) -> &(dyn Transport + Send) {
         match self {
             TransportType::ClientPolling(transport) => transport,
+            #[cfg(feature = "server")]
             TransportType::ServerPolling(transport) => transport,
             TransportType::Websocket(transport) => transport,
         }
@@ -76,6 +76,7 @@ impl TransportType {
     pub fn as_pin_box(&mut self) -> std::pin::Pin<Box<&mut (dyn Transport + Send)>> {
         match self {
             TransportType::ClientPolling(transport) => Box::pin(transport),
+            #[cfg(feature = "server")]
             TransportType::ServerPolling(transport) => Box::pin(transport),
             TransportType::Websocket(transport) => Box::pin(transport),
         }
