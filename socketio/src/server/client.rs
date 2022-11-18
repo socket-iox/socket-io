@@ -1,8 +1,8 @@
-use std::{collections::HashMap, fmt::Debug, ops::Deref, sync::Arc, time::Duration};
+use std::{fmt::Debug, ops::Deref, sync::Arc, time::Duration};
 
+use dashmap::DashMap;
 use engineio_rs::Sid;
 use futures_util::future::BoxFuture;
-use tokio::sync::RwLock;
 use tracing::trace;
 
 use crate::{
@@ -31,7 +31,7 @@ impl Client {
         socket: RawSocket,
         namespace: T,
         sid: Sid,
-        on: Arc<RwLock<HashMap<Event, Callback<Self>>>>,
+        on: Arc<DashMap<Event, Callback<Self>>>,
         server: Arc<Server>,
     ) -> Self {
         let server_clone = server.clone();

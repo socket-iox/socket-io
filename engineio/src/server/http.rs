@@ -74,12 +74,8 @@ impl Polling {
         let (send_tx, send_rx) = channel(server.polling_buffer());
         let (recv_tx, recv_rx) = channel(server.polling_buffer());
 
-        let handles = server.polling_handles();
-        let mut handles = handles.lock().await;
-        handles.insert(
-            sid.clone(),
-            (Arc::new(recv_tx), Arc::new(Mutex::new(send_rx))),
-        );
+        let handles = &server.polling_handles();
+        handles.insert(sid, (Arc::new(recv_tx), Arc::new(Mutex::new(send_rx))));
 
         ServerPollingTransport::new(send_tx, recv_rx)
     }
@@ -109,10 +105,9 @@ impl Polling {
 
     async fn polling_post(server: &Server, sid: &Sid, data: Bytes) {
         trace!("polling post {} {:?}", sid, data);
-        let handles = server.polling_handles();
-        let mut handles = handles.lock().await;
 
-        if let Some((ref mut tx, _)) = handles.get_mut(sid) {
+        if let Some(mut ref_mut) = server.polling_handles().get_mut(sid) {
+            let (ref mut tx, _) = *ref_mut;
             let _ = tx.send(data).await;
         }
     }
@@ -189,8 +184,7 @@ async fn handle_probe(
 }
 
 async fn close_polling(server: &Server, sid: &Sid) {
-    let handles = server.polling_handles();
-    let mut handles = handles.lock().await;
+    let handles = &server.polling_handles();
     handles.remove(sid);
 }
 

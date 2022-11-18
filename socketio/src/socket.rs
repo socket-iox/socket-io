@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     fmt::Debug,
     ops::DerefMut,
     pin::Pin,
@@ -21,6 +20,7 @@ use crate::{
 
 use async_stream::try_stream;
 use bytes::Bytes;
+use dashmap::DashMap;
 use engineio_rs::{
     Packet as EnginePacket, PacketType as EnginePacketType, Socket as EngineSocket, StreamGenerator,
 };
@@ -44,7 +44,7 @@ pub struct Socket<C> {
     pub(crate) nsp: String,
     /// The inner socket client to delegate the methods to.
     socket: RawSocket,
-    on: Arc<RwLock<HashMap<Event, Callback<C>>>>,
+    on: Arc<DashMap<Event, Callback<C>>>,
     outstanding_acks: Arc<RwLock<Vec<Ack<C>>>>,
     is_connected: Arc<AtomicBool>,
     callback_client_fn: Arc<dyn Fn(Self) -> C + Send + Sync>,
@@ -81,7 +81,7 @@ impl<C: Clone + Send + 'static> Socket<C> {
     pub(crate) fn new<T: Into<String>>(
         socket: RawSocket,
         namespace: T,
-        on: Arc<RwLock<HashMap<Event, Callback<C>>>>,
+        on: Arc<DashMap<Event, Callback<C>>>,
         callback_client_fn: Arc<dyn Fn(Self) -> C + Send + Sync>,
     ) -> Self {
         Socket {
@@ -310,16 +310,12 @@ impl<C: Clone + Send + 'static> Socket<C> {
         let self_clone = self.clone();
         let event = event.to_owned();
         tokio::spawn(async move {
-            let mut on = self_clone.on.write().await;
-            let lock = on.deref_mut();
-            trace!("callback on keys {:?}", lock.keys());
-            if let Some(callback) = lock.get_mut(&event) {
+            if let Some(mut callback) = self_clone.on.get_mut(&event) {
                 let c = (self_clone.callback_client_fn)((self_clone).clone());
                 trace!("do callback {:?}", event);
                 callback(payload, c, need_ack).await;
                 trace!("done callback {:?}", event);
             }
-            drop(on);
         });
     }
 

@@ -1,15 +1,15 @@
 use std::{
-    collections::HashMap,
     sync::{atomic::AtomicUsize, Arc},
     time::Duration,
 };
 
 use bytes::Bytes;
+use dashmap::DashMap;
 use tokio::{
     net::TcpListener,
     sync::{
         mpsc::{Receiver, Sender},
-        Mutex, RwLock,
+        Mutex,
     },
     time::{interval, Instant},
 };
@@ -33,11 +33,11 @@ pub(super) struct ServerInner {
     pub(super) port: u16,
     pub(super) server_option: ServerOption,
     pub(super) id_generator: SidGenerator,
-    pub(super) polling_handles: Arc<Mutex<HashMap<Sid, PollingHandle>>>,
+    pub(super) polling_handles: Arc<DashMap<Sid, PollingHandle>>,
     pub(super) polling_buffer: usize,
     pub(super) event_tx: Arc<Sender<Event>>,
     pub(super) event_rx: Arc<Mutex<Receiver<Event>>>,
-    pub(super) sockets: RwLock<HashMap<Sid, Socket>>,
+    pub(super) sockets: Arc<DashMap<Sid, Socket>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -67,7 +67,7 @@ impl Server {
 
     pub async fn emit(&self, sid: &Sid, packet: Packet) -> Result<()> {
         trace!("emit {} {:?}", sid, packet);
-        let sockets = self.inner.sockets.read().await;
+        let sockets = &self.inner.sockets;
         let socket = sockets.get(sid);
         if let Some(s) = socket {
             s.emit(packet).await?;
@@ -80,26 +80,25 @@ impl Server {
     }
 
     pub async fn socket(&self, sid: &Sid) -> Option<Socket> {
-        let sockets = self.inner.sockets.read().await;
+        let sockets = &self.inner.sockets;
         sockets.get(sid).map(|x| x.to_owned())
     }
 
     pub async fn close_socket(&self, sid: &Sid) {
-        let mut sockets = self.inner.sockets.write().await;
-        if let Some(socket) = sockets.remove(sid) {
-            drop(sockets);
+        let sockets = &self.inner.sockets;
+        if let Some((_, socket)) = sockets.remove(sid) {
             let _ = socket.disconnect().await;
         }
     }
 
-    pub(crate) fn polling_handles(&self) -> Arc<Mutex<HashMap<Sid, PollingHandle>>> {
+    pub(crate) fn polling_handles(&self) -> Arc<DashMap<Sid, PollingHandle>> {
         self.inner.polling_handles.clone()
     }
 
     pub(crate) async fn polling_handle(&self, sid: &Sid) -> Option<PollingHandle> {
-        let lock = self.inner.polling_handles.lock().await;
-        let handle = lock.get(sid);
-        handle.cloned()
+        let handles = &self.inner.polling_handles;
+        let handle = handles.get(sid);
+        handle.map(|h| h.to_owned())
     }
 
     pub(crate) async fn drain_polling(&self, sid: &Sid) {
@@ -148,7 +147,7 @@ impl Server {
 
         socket.connect().await?;
 
-        let mut sockets = self.inner.sockets.write().await;
+        let sockets = &self.inner.sockets;
         let _ = sockets.insert(sid.clone(), socket);
         self.start_ping_pong(&sid);
 
@@ -191,7 +190,7 @@ impl Server {
     }
 
     async fn last_pong(&self, sid: &Sid) -> Option<Instant> {
-        let sockets = self.inner.sockets.read().await;
+        let sockets = &self.inner.sockets;
         Some(sockets.get(sid)?.last_pong().await)
     }
 }

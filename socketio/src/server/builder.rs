@@ -2,15 +2,15 @@ use crate::server::server::Server;
 use crate::{callback::Callback, server::client::Client};
 use crate::{AckId, NameSpace};
 use crate::{Event, Payload};
+use dashmap::DashMap;
 use engineio_rs::{ServerBuilder as EngineServerBuilder, ServerOption};
 use futures_util::future::BoxFuture;
 use std::{collections::HashMap, sync::Arc};
-use tokio::sync::RwLock;
 
 #[allow(dead_code)]
 pub struct ServerBuilder {
     server_option: ServerOption,
-    on: HashMap<NameSpace, HashMap<Event, Callback<Client>>>,
+    on: HashMap<NameSpace, DashMap<Event, Callback<Client>>>,
     builder: EngineServerBuilder,
 }
 
@@ -49,7 +49,7 @@ impl ServerBuilder {
         if let Some(on) = self.on.get_mut(&namespace) {
             on.insert(event.into(), Callback::new(callback));
         } else {
-            let mut on = HashMap::new();
+            let on = DashMap::new();
             on.insert(event.into(), Callback::new(callback));
             self.on.insert(namespace, on);
         }
@@ -58,10 +58,10 @@ impl ServerBuilder {
 
     pub fn build(self) -> Arc<Server> {
         let engine_server = self.builder.build();
-        let mut on = HashMap::new();
+        let on = DashMap::new();
 
         for (k, v) in self.on.into_iter() {
-            on.insert(k, Arc::new(RwLock::new(v)));
+            on.insert(k, Arc::new(v));
         }
 
         Arc::new(Server {

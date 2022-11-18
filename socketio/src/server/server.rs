@@ -2,6 +2,7 @@ use crate::{
     ack::AckId, callback::Callback, packet::PacketType, server::Client as ServerSocket,
     socket::RawSocket, Error, Event, NameSpace, Payload,
 };
+use dashmap::DashMap;
 use engineio_rs::{Event as EngineEvent, Server as EngineServer, Sid as EngineSid};
 use futures_util::future::BoxFuture;
 use serde_json::json;
@@ -13,7 +14,6 @@ use std::{
     },
     time::Duration,
 };
-use tokio::sync::RwLock;
 use tracing::{error, trace, warn};
 
 // TODO: read from config
@@ -21,13 +21,13 @@ const CONNECT_TIMEOUT: u64 = 5;
 
 type Sid = Arc<String>;
 type Room = String;
-type Rooms = HashMap<NameSpace, HashMap<Room, HashSet<Sid>>>;
-type On = HashMap<Event, Callback<ServerSocket>>;
+type Rooms = DashMap<NameSpace, HashMap<Room, HashSet<Sid>>>;
+type On = DashMap<Event, Callback<ServerSocket>>;
 
 pub struct Server {
-    pub(crate) on: HashMap<NameSpace, Arc<RwLock<On>>>,
-    pub(crate) rooms: RwLock<Rooms>,
-    pub(crate) clients: RwLock<HashMap<Sid, HashMap<NameSpace, ServerSocket>>>,
+    pub(crate) on: DashMap<NameSpace, Arc<On>>,
+    pub(crate) rooms: Rooms,
+    pub(crate) clients: DashMap<EngineSid, DashMap<Sid, HashMap<NameSpace, ServerSocket>>>,
     pub(crate) engine_server: EngineServer,
     pub(crate) sid_generator: SidGenerator,
 }
@@ -114,7 +114,7 @@ impl Server {
     }
 
     async fn sids_to_emit(&self, nsp: &str, rooms: Vec<&str>) -> HashSet<Sid> {
-        let clients = self.rooms.read().await;
+        let clients = &self.rooms;
         let mut sids_to_emit = HashSet::new();
         if let Some(room_clients) = clients.get(nsp) {
             for room_name in rooms {
@@ -155,11 +155,8 @@ impl Server {
     }
 
     pub(crate) async fn client(&self, sid: &Sid, nsp: &str) -> Option<ServerSocket> {
-        let clients = self.clients.read().await;
-        if let Some(nsp_clients) = clients.get(sid) {
-            return nsp_clients.get(nsp).cloned();
-        }
-        None
+        let esid = &SidGenerator::decode(sid);
+        self.clients.get(esid)?.get(sid)?.get(nsp).cloned()
     }
 
     pub(crate) async fn join<T: Into<String>>(
@@ -168,18 +165,17 @@ impl Server {
         rooms: Vec<T>,
         sid: Sid,
     ) {
-        let mut _rooms = self.rooms.write().await;
         for room_name in rooms {
             let room_name = room_name.into();
-            match _rooms.get_mut(nsp) {
+            match self.rooms.get_mut(nsp) {
                 None => {
                     let mut room_sids = HashSet::new();
                     room_sids.insert(sid.clone());
                     let mut rooms = HashMap::new();
                     rooms.insert(room_name, room_sids);
-                    _rooms.insert(nsp.to_owned(), rooms);
+                    self.rooms.insert(nsp.to_owned(), rooms);
                 }
-                Some(rooms) => {
+                Some(mut rooms) => {
                     if let Some(room_sids) = rooms.get_mut(&room_name) {
                         let _ = room_sids.insert(sid.clone());
                     } else {
@@ -193,9 +189,8 @@ impl Server {
     }
 
     pub(crate) async fn leave(self: &Arc<Self>, nsp: &str, rooms: Vec<&str>, sid: &Sid) {
-        let mut all_rooms = self.rooms.write().await;
         for room_name in rooms {
-            if let Some(nsp_rooms) = all_rooms.get_mut(nsp) {
+            if let Some(mut nsp_rooms) = self.rooms.get_mut(nsp) {
                 if let Some(room_sids) = nsp_rooms.get_mut(room_name) {
                     room_sids.remove(sid);
                 }
@@ -209,7 +204,7 @@ impl Server {
 
             // TODO: support multiple namespace
             match self.polling_transport_info(&esid).await {
-                Some((sid, nsp)) => self.insert_clients(socket, nsp, sid, false).await,
+                Some((sid, nsp)) => self.insert_clients(socket, nsp, esid, sid, false).await,
                 None => self.handle_connect(socket, esid).await,
             };
         }
@@ -219,19 +214,12 @@ impl Server {
     // currently one esid mapping to one sid,
     // one sid mapping one nsp
     async fn polling_transport_info(&self, esid: &EngineSid) -> Option<(Sid, String)> {
-        let clients = self.clients.read().await;
-        for sid in clients.keys() {
-            if &SidGenerator::decode(sid) == esid {
-                if let Some(nsp_clients) = clients.get(sid) {
-                    // currently only one nsp per sid
-                    if let Some(nsp) = nsp_clients.keys().next() {
-                        return Some((sid.to_owned(), nsp.to_owned()));
-                    }
-                }
-            }
-        }
+        let sid_map = self.clients.get(esid)?;
+        let entry = sid_map.iter().next()?;
+        let (sid, nsp_map) = entry.pair();
+        let (nsp, _) = nsp_map.iter().next()?;
 
-        None
+        Some((sid.to_owned(), nsp.to_owned()))
     }
 
     async fn handle_connect(self: &Arc<Self>, socket: RawSocket, esid: EngineSid) {
@@ -240,7 +228,7 @@ impl Server {
         tokio::spawn(async move {
             if tokio::time::timeout(
                 Duration::from_secs(CONNECT_TIMEOUT),
-                slf.do_handle_connect(socket, &esid),
+                slf.do_handle_connect(socket, esid.clone()),
             )
             .await
             .is_err()
@@ -251,12 +239,12 @@ impl Server {
         });
     }
 
-    async fn do_handle_connect(self: &Arc<Self>, socket: RawSocket, esid: &EngineSid) {
-        let sid = self.sid_generator.generate(esid);
+    async fn do_handle_connect(self: &Arc<Self>, socket: RawSocket, esid: EngineSid) {
+        let sid = self.sid_generator.generate(&esid);
         while let Some(Ok(packet)) = socket.poll_packet().await {
             if packet.ptype == PacketType::Connect {
                 let nsp = packet.nsp.clone();
-                self.insert_clients(socket, nsp, sid, true).await;
+                self.insert_clients(socket, nsp, esid, sid, true).await;
                 break;
             } else {
                 continue;
@@ -268,6 +256,7 @@ impl Server {
         self: &Arc<Self>,
         socket: RawSocket,
         nsp: String,
+        esid: EngineSid,
         sid: Sid,
         handshake: bool,
     ) {
@@ -288,29 +277,38 @@ impl Server {
                 let _ = client.handshake(json!({ "sid": sid.clone() })).await;
             }
 
-            let mut clients = self.clients.write().await;
-            let mut ns_clients = HashMap::new();
-            ns_clients.insert(nsp, client);
-            clients.insert(sid, ns_clients);
+            if !self.clients.contains_key(&esid) {
+                self.clients.insert(esid.clone(), DashMap::new());
+            }
+
+            // SAFETY: insert if not exist before
+            let sid_map = self.clients.get_mut(&esid).unwrap();
+
+            if !sid_map.contains_key(&sid) {
+                sid_map.insert(sid.clone(), HashMap::new());
+            }
+
+            // SATETY: insert if not exist before
+            let mut nsp_map = sid_map.get_mut(&sid).unwrap();
+            nsp_map.insert(nsp, client);
+        } else {
+            warn!("unkown nsp {} from client", nsp);
         }
     }
 
     async fn drop_client(self: &Arc<Self>, esid: &EngineSid) {
         self.engine_server.close_socket(esid).await;
 
-        let mut clients = self.clients.write().await;
-        if let Some(_client) = clients.remove(esid) {
+        if self.clients.remove(esid).is_some() {
             //TODO: disconnect
         }
-        drop(clients);
 
         // FIXME: performance will be low if too many nsp and rooms
-        let mut clients = self.rooms.write().await;
-        for nsp_clients in clients.values_mut() {
+        self.rooms.iter_mut().for_each(|mut nsp_clients| {
             for room_clients in nsp_clients.values_mut() {
                 room_clients.retain(|sid| &SidGenerator::decode(sid) != esid)
             }
-        }
+        });
     }
 }
 

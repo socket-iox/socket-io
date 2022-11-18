@@ -1,13 +1,13 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use super::client::{Client, Socket as ClientSocket};
 use crate::socket::RawSocket;
 use crate::{ack::AckId, socket::Socket};
 use crate::{callback::Callback, error::Result, Event, Payload};
 
+use dashmap::DashMap;
 use engineio_rs::{HeaderMap, HeaderValue, SocketBuilder as EngineSocketBuilder};
 use futures_util::future::BoxFuture;
-use tokio::sync::RwLock;
 use tracing::trace;
 use url::Url;
 
@@ -31,7 +31,7 @@ pub enum TransportType {
 #[derive(Clone)]
 pub struct ClientBuilder {
     address: String,
-    on: Arc<RwLock<HashMap<Event, Callback<ClientSocket>>>>,
+    on: Arc<DashMap<Event, Callback<ClientSocket>>>,
     namespace: String,
     opening_headers: Option<HeaderMap>,
     transport_type: TransportType,
@@ -196,7 +196,7 @@ impl ClientBuilder {
         // SAFETY: Lock is held for such amount of time no code paths lead to a panic while lock is held
         let on = self.on.clone();
         tokio::spawn(async move {
-            on.write().await.insert(event, callback);
+            on.insert(event, callback);
         });
         self
     }
