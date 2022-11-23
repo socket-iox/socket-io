@@ -45,7 +45,11 @@ impl Polling {
                 let transport = Self::polling_transport(&server, sid.clone()).await;
                 let transport = TransportType::ServerPolling(transport);
 
-                if server.store_transport(sid.clone(), transport).await.is_ok() {
+                if server
+                    .store_transport(sid.clone(), transport, false)
+                    .await
+                    .is_ok()
+                {
                     write_stream(&mut stream, 200, Some(Self::handshake_body(&server, sid))).await
                 } else {
                     write_stream(&mut stream, 500, None).await
@@ -123,6 +127,7 @@ impl Websocket {
         _addr: &SocketAddr,
     ) -> Result<()> {
         let mut ws_stream = accept_async(stream).await?;
+        let is_upgrade = sid.is_some();
         let sid = match sid {
             // websocket connecting directly, instead of upgrading from polling
             None => handshake(server.clone(), &mut ws_stream).await?,
@@ -133,7 +138,7 @@ impl Websocket {
         let transport = WebsocketTransport::new(sender, receiver);
         let transport = TransportType::Websocket(transport);
 
-        server.store_transport(sid, transport).await?;
+        server.store_transport(sid, transport, is_upgrade).await?;
 
         Ok(())
     }

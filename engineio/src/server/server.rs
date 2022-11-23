@@ -13,7 +13,7 @@ use tokio::{
     },
     time::{interval, Instant},
 };
-use tracing::trace;
+use tracing::{trace, warn};
 
 use crate::{
     error::Result,
@@ -134,22 +134,35 @@ impl Server {
         }
     }
 
-    pub(crate) async fn store_transport(&self, sid: Sid, transport: TransportType) -> Result<()> {
+    pub(crate) async fn store_transport(
+        &self,
+        sid: Sid,
+        transport: TransportType,
+        is_upgrade: bool,
+    ) -> Result<()> {
         trace!("store_transport {} {:?}", sid, transport);
         let handshake = self.handshake_packet(vec!["webscocket".to_owned()], Some(sid.clone()));
-        let socket = Socket::new(
-            transport,
-            handshake,
-            Some(self.inner.event_tx.clone()),
-            false, // server no need to pong
-            true,
-        );
+        if is_upgrade {
+            let sockets = &self.inner.sockets;
+            match sockets.get_mut(&sid) {
+                Some(socket) => socket.upgrade(transport).await,
+                None => warn!("upgrade polling not exist {:?}", sid),
+            };
+        } else {
+            let socket = Socket::new(
+                transport,
+                handshake,
+                Some(self.inner.event_tx.clone()),
+                false, // server no need to pong
+                true,
+            );
 
-        socket.connect().await?;
+            socket.connect().await?;
 
-        let sockets = &self.inner.sockets;
-        let _ = sockets.insert(sid.clone(), socket);
-        self.start_ping_pong(&sid);
+            let sockets = &self.inner.sockets;
+            let _ = sockets.insert(sid.clone(), socket);
+            self.start_ping_pong(&sid);
+        }
 
         Ok(())
     }
@@ -216,16 +229,18 @@ impl SidGenerator {
 mod test {
     use super::*;
 
-    use std::{sync::Arc, time::Duration};
+    use std::time::Duration;
 
     use futures_util::{Stream, StreamExt};
     use reqwest::Url;
 
     use crate::{server::builder::ServerBuilder, socket::SocketBuilder, Packet};
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
     async fn test_connection() -> Result<()> {
-        // tracing_subscriber::fmt() .with_env_filter("engineio=trace") .init();
+        // tracing_subscriber::fmt()
+        //     .with_env_filter("engineio=trace")
+        //     .init();
         let url = crate::test::rust_engine_io_server();
         let (mut rx, _server) = start_server(url.clone()).await;
 
@@ -361,25 +376,19 @@ mod test {
 
     async fn test_data_transport(client: Socket, server_rx: &mut Receiver<String>) -> Result<()> {
         client.connect().await?;
-
         let client_clone = client.clone();
+
+        // ignore item send by last client
+        while let Some(item) = server_rx.recv().await {
+            if item.starts_with("open") {
+                break;
+            }
+        }
         poll_stream(client_clone);
 
         client
             .emit(Packet::new(crate::PacketType::Message, Bytes::from("msg")))
             .await?;
-
-        let mut sid = Arc::new("".to_owned());
-
-        // ignore item send by last client
-        while let Some(item) = server_rx.recv().await {
-            if item.starts_with("open") {
-                let items: Vec<&str> = item.split(' ').collect();
-                sid = Arc::new(items[1].to_owned());
-                break;
-            }
-        }
-        trace!("test_data_transport 4, sid {}", sid);
 
         // wait ping pong
         tokio::time::sleep(Duration::from_millis(100)).await;

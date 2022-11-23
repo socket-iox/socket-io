@@ -179,7 +179,6 @@ impl Socket {
             return Err(error);
         }
 
-        trace!("socket emit {:?}", packet);
         // send a post request with the encoded payload as body
         // if this is a binary attachment, then send the raw bytes
         let data = match packet.ptype {
@@ -188,6 +187,7 @@ impl Socket {
         };
 
         let lock = self.transport.lock().await;
+        trace!("socket emit {:?} through {:?}", data, lock);
         let fut = lock.as_transport().emit(data);
 
         if let Err(error) = fut.await {
@@ -241,6 +241,15 @@ impl Socket {
         }
 
         self.connected.store(false, Ordering::Release);
+    }
+
+    pub(crate) async fn upgrade(&self, transport: TransportType) {
+        trace!("socket upgrade from {:?}", transport);
+        let mut lock = self.transport.lock().await;
+        *lock = transport.clone();
+
+        let mut lock = self.generator.lock().await;
+        *lock = StreamGenerator::new(Self::stream(transport));
     }
 
     /// Helper method that parses bytes and returns an iterator over the elements.

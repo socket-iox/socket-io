@@ -18,6 +18,7 @@ pub trait Transport: Send + Debug + Unpin + Stream<Item = Result<Bytes>> {
     async fn emit(&self, payload: Data) -> Result<()>;
 }
 
+#[derive(Debug)]
 pub enum Data {
     Text(Bytes),
     Binary(Bytes),
