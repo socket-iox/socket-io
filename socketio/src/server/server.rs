@@ -203,7 +203,7 @@ impl Server {
             let socket = RawSocket::server_end(engine_socket);
 
             // TODO: support multiple namespace
-            match self.polling_transport_info(&esid).await {
+            match self.client_info(&esid).await {
                 Some((sid, nsp)) => self.insert_clients(socket, nsp, esid, sid, false).await,
                 None => self.handle_connect(socket, esid).await,
             };
@@ -213,7 +213,7 @@ impl Server {
     // TODO: support multiple nsp
     // currently one esid mapping to one sid,
     // one sid mapping one nsp
-    async fn polling_transport_info(&self, esid: &EngineSid) -> Option<(Sid, String)> {
+    async fn client_info(&self, esid: &EngineSid) -> Option<(Sid, String)> {
         let sid_map = self.clients.get(esid)?;
         let entry = sid_map.iter().next()?;
         let (sid, nsp_map) = entry.pair();

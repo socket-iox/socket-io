@@ -4,9 +4,7 @@ use socketio_rs::{AckId, Payload, ServerBuilder, ServerSocket};
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter("engineio=info,socketio=info")
-        .init();
+    tracing_subscriber::fmt::init();
     let callback = |_payload: Option<Payload>, socket: ServerSocket, _| {
         async move {
             socket.join(vec!["room 1"]).await;

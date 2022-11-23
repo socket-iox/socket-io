@@ -213,7 +213,7 @@ impl Default for ServerOption {
         Self {
             ping_timeout: 25000,
             ping_interval: 20000,
-            max_payload: 1024,
+            max_payload: 102400,
         }
     }
 }
@@ -320,7 +320,7 @@ mod test {
         let server_option = ServerOption {
             ping_timeout: 20,
             ping_interval: 20,
-            max_payload: 1024,
+            max_payload: 102400,
         };
         let (server, rx) = setup(port, server_option);
         let server_clone = server.clone();
