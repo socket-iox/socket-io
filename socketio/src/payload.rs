@@ -36,6 +36,7 @@ impl From<Option<serde_json::Value>> for Payload {
 impl From<Vec<serde_json::Value>> for Payload {
     fn from(value: Vec<serde_json::Value>) -> Self {
         if value.len() == 1 {
+            // SAFETY: first element must exist
             Self::Json(value.first().unwrap().to_owned())
         } else {
             Self::Multi(value.into_iter().map(|v| v.into()).collect())

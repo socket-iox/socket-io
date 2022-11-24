@@ -468,6 +468,7 @@ impl<C: Clone + Send + 'static> Socket<C> {
         match packet.data {
             Some(serde_json::Value::Array(ref contents)) if contents.is_empty() => None,
             Some(serde_json::Value::Array(ref contents)) if contents.len() == 1 => {
+                // SAFETY: len checked before
                 Some(Payload::Json(contents.get(0).unwrap().clone()))
             }
             Some(serde_json::Value::Array(ref contents)) if contents.len() == 2 => {

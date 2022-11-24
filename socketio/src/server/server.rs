@@ -155,7 +155,7 @@ impl Server {
     }
 
     pub(crate) async fn client(&self, sid: &Sid, nsp: &str) -> Option<ServerSocket> {
-        let esid = &SidGenerator::decode(sid);
+        let esid = &SidGenerator::decode(sid)?;
         self.clients.get(esid)?.get(sid)?.get(nsp).cloned()
     }
 
@@ -277,19 +277,9 @@ impl Server {
                 let _ = client.handshake(json!({ "sid": sid.clone() })).await;
             }
 
-            if !self.clients.contains_key(&esid) {
-                self.clients.insert(esid.clone(), DashMap::new());
-            }
+            let sid_map = self.clients.entry(esid).or_default();
 
-            // SAFETY: insert if not exist before
-            let sid_map = self.clients.get_mut(&esid).unwrap();
-
-            if !sid_map.contains_key(&sid) {
-                sid_map.insert(sid.clone(), HashMap::new());
-            }
-
-            // SATETY: insert if not exist before
-            let mut nsp_map = sid_map.get_mut(&sid).unwrap();
+            let mut nsp_map = sid_map.entry(sid).or_default();
             nsp_map.insert(nsp, client);
         } else {
             warn!("unkown nsp {} from client", nsp);
@@ -306,7 +296,7 @@ impl Server {
         // FIXME: performance will be low if too many nsp and rooms
         self.rooms.iter_mut().for_each(|mut nsp_clients| {
             for room_clients in nsp_clients.values_mut() {
-                room_clients.retain(|sid| &SidGenerator::decode(sid) != esid)
+                room_clients.retain(|sid| SidGenerator::decode(sid).as_ref() != Some(esid))
             }
         });
     }
@@ -323,12 +313,11 @@ impl SidGenerator {
         Arc::new(base64::encode(format!("{}-{}", engine_sid, seq)))
     }
 
-    pub fn decode(sid: &Sid) -> EngineSid {
-        // SAFETY: base64 decode valid
-        let sid_vec = base64::decode(sid.as_bytes()).unwrap();
-        let esid_sid = std::str::from_utf8(&sid_vec).unwrap();
+    pub fn decode(sid: &Sid) -> Option<EngineSid> {
+        let sid_vec = base64::decode(sid.as_bytes()).ok()?;
+        let esid_sid = std::str::from_utf8(&sid_vec).ok()?;
         let tokens: Vec<&str> = esid_sid.split('-').collect();
-        Arc::new(tokens[0].to_owned())
+        Some(Arc::new(tokens[0].to_owned()))
     }
 }
 
@@ -342,7 +331,7 @@ fn poll(socket: ServerSocket) {
             let next = socket.poll_packet().await;
             match next {
                 Some(e @ Err(Error::IncompleteResponseFromEngineIo(_))) => {
-                    trace!("Network error occured: {}", e.unwrap_err());
+                    trace!("Network error occured: {:?}", e.err());
                 }
                 None => break,
                 _ => {}
@@ -377,7 +366,7 @@ mod test {
         let engine_sid = Arc::new("engine_sid".to_owned());
         let sid = generator.generate(&engine_sid);
 
-        assert_eq!(SidGenerator::decode(&sid), engine_sid);
+        assert_eq!(SidGenerator::decode(&sid), Some(engine_sid));
     }
 
     #[tokio::test]
