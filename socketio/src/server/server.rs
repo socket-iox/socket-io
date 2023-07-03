@@ -65,6 +65,19 @@ impl Server {
         }
     }
 
+    pub async fn client_count(self: &Arc<Self>) -> usize {
+        let mut count = 0;
+        let engine_sids = &self.clients.clone();
+        for engine_sid_entry in engine_sids.iter() {
+            let engine_sid_map = engine_sid_entry.value();
+            for sid_entry in engine_sid_map.iter() {
+                let sid_map = sid_entry.value();
+                count += sid_map.len();
+            }
+        }
+        count
+    }
+
     pub async fn emit_to_with_ack<F, E, D>(
         &self,
         nsp: &str,
@@ -572,6 +585,19 @@ mod test {
             .on("/admin", "trigger_server_ack", trigger_ack)
             .build();
 
+        let server_clone = server.clone();
+
         tokio::spawn(async move { server.serve().await });
+
+        tokio::spawn(async move {
+            let url = rust_socket_io_server();
+            let socket = ClientBuilder::new(url)
+                .namespace("/admin")
+                .connect()
+                .await;
+            let count = server_clone.client_count().await;
+            assert_eq!(count, 1);
+        });
+
     }
 }
