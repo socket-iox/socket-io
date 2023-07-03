@@ -33,6 +33,10 @@ pub struct Server {
 }
 
 impl Server {
+    pub fn client_count(self: &Arc<Self>) -> usize {
+        self.clients.iter().map(|i| i.iter().count()).sum()
+    }
+
     #[allow(dead_code)]
     pub async fn serve(self: Arc<Self>) {
         self.recv_event();
@@ -331,7 +335,7 @@ fn poll(socket: ServerSocket) {
             let next = socket.poll_packet().await;
             match next {
                 Some(e @ Err(Error::IncompleteResponseFromEngineIo(_))) => {
-                    trace!("Network error occured: {:?}", e.err());
+                    trace!("Network error occurred: {:?}", e.err());
                 }
                 None => break,
                 _ => {}
@@ -352,7 +356,7 @@ mod test {
 
     use crate::{
         client::ClientBuilder, client::Socket, server::client::Client as ServerClient,
-        test::rust_socket_io_server, AckId, Event, Payload, ServerBuilder,
+        test::rust_socket_io_server, AckId, Event, Payload, Server, ServerBuilder,
     };
 
     use super::SidGenerator;
@@ -374,8 +378,9 @@ mod test {
         // tracing_subscriber::fmt()
         //     .with_env_filter("engineio=trace,socketio=trace")
         //     .init();
-        setup();
+        let server = setup();
         test_emit().await;
+        test_client_count(&server).await;
         test_client_ask_ack().await;
         test_server_ask_ack().await;
     }
@@ -413,6 +418,49 @@ mod test {
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         assert!(is_recv.load(Ordering::SeqCst));
+    }
+
+    async fn test_client_count(server: &Arc<Server>) {
+        let url = rust_socket_io_server();
+
+        let socket = ClientBuilder::new(url.clone())
+            .namespace("/admin")
+            .on(Event::Connect, move |_payload, socket, _| {
+                async move {
+                    socket.emit("echo", json!("data")).await.expect("success");
+                }
+                .boxed()
+            })
+            .connect()
+            .await;
+
+        let socket2 = ClientBuilder::new(url.clone())
+            .namespace("/admin")
+            .on(Event::Connect, move |_payload, socket, _| {
+                async move {
+                    socket.emit("echo", json!("data")).await.expect("success");
+                }
+                .boxed()
+            })
+            .connect()
+            .await;
+
+        let socket3 = ClientBuilder::new(url)
+            .namespace("/admin")
+            .on(Event::Connect, move |_payload, socket, _| {
+                async move {
+                    socket.emit("echo", json!("data")).await.expect("success");
+                }
+                .boxed()
+            })
+            .connect()
+            .await;
+
+        assert!(socket.is_ok());
+        assert!(socket2.is_ok());
+        assert!(socket3.is_ok());
+
+        assert_eq!(server.client_count(), 3);
     }
 
     async fn test_client_ask_ack() {
@@ -511,7 +559,7 @@ mod test {
         assert!(is_server_recv_ack.load(Ordering::SeqCst));
     }
 
-    fn setup() {
+    fn setup() -> Arc<crate::Server> {
         let echo_callback =
             move |_payload: Option<Payload>, socket: ServerClient, _need_ack: Option<AckId>| {
                 async move {
@@ -572,6 +620,10 @@ mod test {
             .on("/admin", "trigger_server_ack", trigger_ack)
             .build();
 
+        let server_clone = server.clone();
+
         tokio::spawn(async move { server.serve().await });
+
+        server_clone
     }
 }
